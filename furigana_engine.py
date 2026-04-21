@@ -66,6 +66,13 @@ class RubyAwareParser(HTMLParser):
 # Explicit display:ruby / writing-mode overrides break vertical-rl ruby.
 # Auto ruby uses <rb>…</rb><rt>…</rt> (no <rp>) to match publisher structure.
 
+def _make_ruby_css(btn_side='left'):
+    """Return RUBY_CSS with the toggle button on 'left' (vertical) or 'right' (horizontal)."""
+    if btn_side == 'right':
+        return RUBY_CSS.replace('    left: 8px;\n', '    right: 8px;\n')
+    return RUBY_CSS
+
+
 RUBY_CSS = """<style id="furigana-ruby-css">
 /* Furigana Ruby Plugin */
 
@@ -265,16 +272,28 @@ RUBY_JS = """<script id="furigana-ruby-js">
 """
 
 
-def inject_css_js(html):
+def inject_css_js(html, btn_side='left'):
     if 'id="furigana-ruby-css"' in html:
-        return html
+        # CSS already present (e.g. partial strip kept it).
+        # Update the button side in the existing embedded <style> block so
+        # a re-add after orientation change still gets the right position.
+        opposite = 'right' if btn_side == 'left' else 'left'
+        _s = re.compile(
+            r'(<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*>)(.*?)(</style>)',
+            re.DOTALL)
+        def _upd(m):
+            updated = re.sub(
+                rf'\b{opposite}\s*:\s*8px\s*;', f'{btn_side}: 8px;', m.group(2))
+            return m.group(1) + updated + m.group(3)
+        return _s.sub(_upd, html)
+    css = _make_ruby_css(btn_side)
     if '</head>' in html:
-        html = html.replace('</head>', RUBY_CSS + '</head>', 1)
+        html = html.replace('</head>', css + '</head>', 1)
     elif '<body' in html:
         idx = html.index('<body')
-        html = html[:idx] + RUBY_CSS + html[idx:]
+        html = html[:idx] + css + html[idx:]
     else:
-        html = RUBY_CSS + html
+        html = css + html
     if '</body>' in html:
         html = html.replace('</body>', RUBY_JS + '</body>', 1)
     else:
@@ -400,7 +419,7 @@ def segments_to_html(segments):
     return ''.join(parts)
 
 
-def inject_furigana_html(html_content, annotate_levels=None):
+def inject_furigana_html(html_content, annotate_levels=None, btn_side='left'):
     parser = RubyAwareParser()
     parser.feed(html_content)
     parts = []
@@ -413,7 +432,7 @@ def inject_furigana_html(html_content, annotate_levels=None):
             else:
                 segs = text_to_ruby_segments(content, annotate_levels=annotate_levels)
                 parts.append(segments_to_html(segs))
-    return inject_css_js(''.join(parts))
+    return inject_css_js(''.join(parts), btn_side=btn_side)
 
 
 def strip_auto_furigana_html(html_content):
@@ -540,6 +559,20 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
     if mode == 'add':
         init_kakasi()
 
+    # Detect orientation once so every HTML file gets the correct button side.
+    btn_side = 'left'   # default: vertical layout → bottom-left
+    if mode == 'add':
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.orientation_engine import (
+                    detect_orientation)
+            except ImportError:
+                from orientation_engine import detect_orientation
+            if detect_orientation(epub_path) == 'horizontal':
+                btn_side = 'right'
+        except Exception:
+            pass
+
     tmp = tempfile.mktemp(suffix='.epub')
     shutil.copy2(epub_path, tmp)
 
@@ -571,7 +604,8 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                         text = data.decode('utf-8')
                         before = text.count('class="auto"')
                         if mode == 'add':
-                            text = inject_furigana_html(text, annotate_levels=annotate_levels)
+                            text = inject_furigana_html(text, annotate_levels=annotate_levels,
+                                                        btn_side=btn_side)
                         elif remove_levels is not None:
                             text = strip_auto_furigana_by_levels(text, remove_levels)
                         else:

@@ -146,6 +146,24 @@
     }
 
     // ── Button ────────────────────────────────────────────────────
+
+    // Position bottom-left for vertical text, bottom-right for horizontal
+    function positionBtn() {
+        const btn = document.getElementById('fg-btn');
+        if (!btn) return;
+        try {
+            const wm = (getComputedStyle(document.documentElement).writingMode ||
+                        getComputedStyle(document.body).writingMode || '');
+            if (wm.includes('vertical')) {
+                btn.style.left  = '8px';
+                btn.style.right = 'auto';
+            } else {
+                btn.style.right = '8px';
+                btn.style.left  = 'auto';
+            }
+        } catch (e) {}
+    }
+
     function createBtn() {
         if (document.getElementById('fg-btn')) return;   // RUBY_JS already created it
         if (!document.querySelector('ruby')) return;      // no ruby on this page
@@ -171,6 +189,7 @@
 
         document.body.appendChild(btn);
         updateBtn(getMode());
+        positionBtn();
 
         // Show on any mouse/touch activity; fade after idle
         document.addEventListener('mousemove',  () => showBtn(2500), { passive: true });

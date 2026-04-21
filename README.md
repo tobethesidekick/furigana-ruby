@@ -105,6 +105,25 @@ The toggle works identically in any browser — open Calibre's content server at
 
 ---
 
+## Changelog
+
+### v1.1.0
+**New: EPUB Layout Converter**
+- Added **↔ Convert Layout…** in the toolbar menu — converts any CJK EPUB between vertical (right-to-left columns) and horizontal text layout in one click
+- Handles CSS `writing-mode` across all stylesheets, OPF `page-progression-direction`, and inline styles
+- Preserves all publisher and auto-generated ruby annotations through the conversion
+
+**Toggle button positioning**
+- Toggle pill now appears **bottom-left** for vertical-text books and **bottom-right** for horizontal-text books
+- Position is baked into the EPUB at processing time (reliable across all readers and devices)
+- Detection covers `-webkit-writing-mode`, `-epub-writing-mode`, and legacy `tb-rl` syntax used by Japanese publishers, plus embedded `<style>` blocks and OPF `primary-writing-mode` metadata
+- Re-adding ruby or running Convert Layout always updates the button position to match the current layout
+
+### v1.0.0
+- Initial release: auto-generates furigana for Japanese EPUBs with JLPT-level filtering, publisher ruby preservation, and a 3-state viewer toggle (All / Publisher only / Off)
+
+---
+
 ## Building from source
 
 The source files live in this repository. The plugin zip is built by `setup_plugin.py`, which bundles pykakasi and its dependencies automatically.

@@ -136,7 +136,32 @@ class LevelManageDialog(QDialog):
         return {lvl for lvl, cb in self._cbs.items() if cb.isChecked()}
 
 
-# ── Worker ────────────────────────────────────────────────────────────────────
+# ── Workers ───────────────────────────────────────────────────────────────────
+
+class OrientationWorker(QThread):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(bool, int, int, bool, list, str)  # ok, css, html, opf, errs, msg
+
+    def __init__(self, epub_path, output_path, target):
+        super().__init__()
+        self.epub_path   = epub_path
+        self.output_path = output_path
+        self.target      = target
+
+    def run(self):
+        try:
+            from calibre_plugins.furigana_ruby.orientation_engine import (
+                process_epub_orientation)
+            css_n, html_n, opf_ok, errors = process_epub_orientation(
+                self.epub_path, self.output_path, self.target,
+                progress_callback=lambda c, t, n:
+                    self.progress.emit(c, t, os.path.basename(n)),
+            )
+            self.finished.emit(True, css_n, html_n, opf_ok, errors, '')
+        except Exception:
+            import traceback
+            self.finished.emit(False, 0, 0, False, [], traceback.format_exc())
+
 
 class FuriganaWorker(QThread):
     progress = pyqtSignal(int, int, str)
@@ -216,14 +241,24 @@ class FuriganaAction(InterfaceAction):
         except Exception:
             pass
 
-        # ── Dropdown: About only ───────────────────────────────────
+        # ── Dropdown menu ──────────────────────────────────────────
         self.menu = QMenu(self.gui)
         self.qaction.setMenu(self.menu)
         self.qaction.triggered.connect(self.open_main_dialog)
 
-        a = QAction('ℹ About / Help', self.gui)
-        a.triggered.connect(self.show_about)
-        self.menu.addAction(a)
+        a1 = QAction('✦ Edit Ruby…', self.gui)
+        a1.triggered.connect(self.open_main_dialog)
+        self.menu.addAction(a1)
+
+        a2 = QAction('↔ Convert Layout…', self.gui)
+        a2.triggered.connect(self.open_orientation_dialog)
+        self.menu.addAction(a2)
+
+        self.menu.addSeparator()
+
+        a3 = QAction('ℹ About / Help', self.gui)
+        a3.triggered.connect(self.show_about)
+        self.menu.addAction(a3)
 
     # ── Helpers ───────────────────────────────────────────────────
 
@@ -559,6 +594,202 @@ class FuriganaAction(InterfaceAction):
             'Could not open the viewer automatically.\n'
             'Please double-click the book in the library to open it.',
             show=True)
+
+    # ── Orientation conversion ────────────────────────────────────
+
+    def open_orientation_dialog(self):
+        ids = self._selected_ids()
+        if not ids:
+            warning_dialog(self.gui, 'No Book Selected',
+                'Select a Japanese/Chinese/Korean EPUB book first.', show=True)
+            return
+        self._show_orientation_dialog(ids[0])
+
+    def _show_orientation_dialog(self, book_id):
+        path = self._epub_path(book_id)
+        if not path:
+            warning_dialog(self.gui, 'No EPUB',
+                'No EPUB format found for this book.', show=True)
+            return
+
+        try:
+            from calibre_plugins.furigana_ruby.orientation_engine import detect_orientation
+        except ImportError:
+            from orientation_engine import detect_orientation
+
+        db      = self.gui.current_db.new_api
+        title   = db.field_for('title', book_id) or f'Book {book_id}'
+        current = detect_orientation(path)   # 'vertical' | 'horizontal' | 'unknown'
+        target  = 'horizontal' if current == 'vertical' else 'vertical'
+
+        # ── Dialog ────────────────────────────────────────────────
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('Convert Layout')
+        dlg.setMinimumWidth(560)
+        dlg.setMinimumHeight(320)
+        dlg.resize(580, 340)
+
+        vl = QVBoxLayout()
+        vl.setSpacing(12)
+        dlg.setLayout(vl)
+
+        te = QTextEdit()
+        te.setReadOnly(True)
+        sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        te.setSizePolicy(sp.Expanding, sp.Expanding)
+        vl.addWidget(te)
+
+        if current == 'vertical':
+            status_text = (
+                f'📖  "{title}"\n\n'
+                f'Current layout:   Vertical (right-to-left columns)\n\n'
+                f'Clicking Convert will:\n'
+                f'  • Change writing-mode to horizontal in all CSS files\n'
+                f'  • Update the OPF spine direction to left-to-right\n'
+                f'  • Fix any inline vertical styles in the HTML\n\n'
+                f'Publisher and auto ruby annotations are preserved.'
+            )
+            btn_label = '↔  Convert to Horizontal'
+        elif current == 'horizontal':
+            status_text = (
+                f'📖  "{title}"\n\n'
+                f'Current layout:   Horizontal (left-to-right)\n\n'
+                f'Clicking Convert will:\n'
+                f'  • Add writing-mode: vertical-rl to all CSS files\n'
+                f'  • Update the OPF spine direction to right-to-left\n'
+                f'  • Fix any inline horizontal styles in the HTML\n\n'
+                f'Publisher and auto ruby annotations are preserved.'
+            )
+            btn_label = '↔  Convert to Vertical'
+        else:
+            status_text = (
+                f'📖  "{title}"\n\n'
+                f'Current layout:   Unknown\n\n'
+                f'The orientation could not be detected from the OPF or CSS.\n'
+                f'You can still attempt a conversion — choose a target below.'
+            )
+            btn_label = '↔  Convert to Vertical'
+
+        te.setPlainText(status_text)
+
+        # ── Button row ────────────────────────────────────────────
+        btn_row     = QHBoxLayout()
+        btn_convert = QPushButton(btn_label)
+        btn_viewer  = QPushButton('📖 Open in Viewer')
+        btn_close   = QPushButton('Close')
+        btn_convert.setMinimumWidth(200)
+        btn_viewer.setMinimumWidth(130)
+        btn_close.setMinimumWidth(70)
+        btn_row.addWidget(btn_convert)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_viewer)
+        btn_row.addWidget(btn_close)
+        vl.addLayout(btn_row)
+
+        # ── Convert handler ───────────────────────────────────────
+        def on_convert():
+            btn_convert.setEnabled(False)
+
+            try:
+                wm = Qt.WindowModality.WindowModal
+            except AttributeError:
+                wm = Qt.WindowModal
+
+            tmp = tempfile.mktemp(suffix='.epub')
+            prog = QProgressDialog(
+                f'Converting: {title}', 'Cancel', 0, 100, self.gui)
+            prog.setWindowTitle(
+                'Converting to Horizontal…' if target == 'horizontal'
+                else 'Converting to Vertical…')
+            prog.setWindowModality(wm)
+            prog.setMinimumDuration(0)
+            prog.setValue(0)
+            prog.show()
+
+            done = [False]
+            result = [None]
+
+            worker = OrientationWorker(path, tmp, target)
+
+            def on_prog(c, t, n):
+                if not prog.wasCanceled():
+                    prog.setValue(int(c / max(t, 1) * 100))
+                    prog.setLabelText(f'Processing: {n}')
+
+            def on_done(ok, css_n, html_n, opf_ok, errs, tb):
+                done[0]   = True
+                result[0] = (ok, css_n, html_n, opf_ok, errs, tb)
+
+            worker.progress.connect(on_prog)
+            worker.finished.connect(on_done)
+            worker.start()
+
+            while not done[0]:
+                QApplication.processEvents()
+                if prog.wasCanceled():
+                    worker.terminate()
+                    worker.wait()
+                    try:
+                        os.unlink(tmp)
+                    except Exception:
+                        pass
+                    prog.close()
+                    btn_convert.setEnabled(True)
+                    te.setPlainText('⚠ Cancelled.')
+                    return
+
+            worker.wait()
+            prog.close()
+
+            ok, css_n, html_n, opf_ok, errs, tb = result[0]
+
+            if not ok:
+                te.setPlainText(f'⚠ Conversion failed:\n\n{tb}')
+                btn_convert.setEnabled(True)
+                return
+
+            try:
+                self.gui.current_db.new_api.add_format(
+                    book_id, 'EPUB', tmp, replace=True)
+            except Exception as e:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+                te.setPlainText(f'⚠ Could not save EPUB: {e}')
+                btn_convert.setEnabled(True)
+                return
+            finally:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+
+            self.gui.library_view.model().refresh_ids([book_id])
+
+            direction_label = ('Horizontal' if target == 'horizontal'
+                               else 'Vertical')
+            msg = (
+                f'✅  Converted to {direction_label} — "{title}"\n\n'
+                f'  CSS files modified:         {css_n}\n'
+                f'  HTML files (inline styles): {html_n}\n'
+                f'  OPF spine updated:          {"Yes" if opf_ok else "No change needed"}\n'
+            )
+            if errs:
+                msg += f'\n⚠ {len(errs)} file(s) had errors (skipped).'
+            te.setPlainText(msg)
+            # Disable convert button — book is already converted
+            btn_convert.setEnabled(False)
+
+        def on_viewer():
+            dlg.reject()
+            self._open_in_viewer(book_id)
+
+        btn_convert.clicked.connect(on_convert)
+        btn_viewer.clicked.connect(on_viewer)
+        btn_close.clicked.connect(dlg.reject)
+
+        dlg.exec() if PYQT6 else dlg.exec_()
 
     # ── About ─────────────────────────────────────────────────────
 
