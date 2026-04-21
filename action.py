@@ -500,8 +500,12 @@ class FuriganaAction(InterfaceAction):
         prog.setWindowTitle('Adding Ruby…' if mode == 'add' else 'Removing Ruby…')
         prog.setWindowModality(wm)
         prog.setMinimumDuration(0)
+        prog.setMinimumWidth(460)
         prog.setValue(0)
         prog.show()
+        prog.raise_()
+        prog.activateWindow()
+        QApplication.processEvents()   # paint before heavy work starts
 
         done = [False]; err = [None]; ruby_n = [0]; ferrs = [[]]
 
@@ -703,8 +707,12 @@ class FuriganaAction(InterfaceAction):
                 else 'Converting to Vertical…')
             prog.setWindowModality(wm)
             prog.setMinimumDuration(0)
+            prog.setMinimumWidth(460)
             prog.setValue(0)
             prog.show()
+            prog.raise_()
+            prog.activateWindow()
+            QApplication.processEvents()   # paint before heavy work starts
 
             done = [False]
             result = [None]

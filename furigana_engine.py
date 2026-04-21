@@ -600,6 +600,9 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
             for name in names:
                 data = zin.read(name)
                 if name in html_files:
+                    processed += 1
+                    if progress_callback:          # fire BEFORE heavy work so
+                        progress_callback(processed, total, name)  # label updates immediately
                     try:
                         text = data.decode('utf-8')
                         before = text.count('class="auto"')
@@ -614,9 +617,6 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                         data = text.encode('utf-8')
                     except Exception as e:
                         file_errors.append(f'{name}: {e}')
-                    processed += 1
-                    if progress_callback:
-                        progress_callback(processed, total, name)
                 if name == 'mimetype':
                     zout.writestr(
                         zipfile.ZipInfo('mimetype'), data,

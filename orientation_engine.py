@@ -340,6 +340,9 @@ def process_epub_orientation(epub_path, output_path, target,
 
                     # ── CSS files ──────────────────────────────────────
                     if name.lower().endswith('.css'):
+                        processed += 1
+                        if progress_callback:
+                            progress_callback(processed, total, name)
                         try:
                             css = data.decode('utf-8')
                             new_css = (_css_to_horizontal(css)
@@ -350,12 +353,12 @@ def process_epub_orientation(epub_path, output_path, target,
                             data = new_css.encode('utf-8')
                         except Exception as e:
                             errors.append((name, str(e)))
-                        processed += 1
-                        if progress_callback:
-                            progress_callback(processed, total, name)
 
                     # ── HTML / XHTML files ─────────────────────────────
                     elif name.lower().endswith(('.xhtml', '.html', '.htm')):
+                        processed += 1
+                        if progress_callback:
+                            progress_callback(processed, total, name)
                         try:
                             html = data.decode('utf-8')
                             new_html = (_html_inline_to_horizontal(html)
@@ -368,12 +371,12 @@ def process_epub_orientation(epub_path, output_path, target,
                             data = new_html.encode('utf-8')
                         except Exception as e:
                             errors.append((name, str(e)))
-                        processed += 1
-                        if progress_callback:
-                            progress_callback(processed, total, name)
 
                     # ── OPF file ───────────────────────────────────────
                     elif name == opf_path:
+                        processed += 1
+                        if progress_callback:
+                            progress_callback(processed, total, name)
                         try:
                             opf = data.decode('utf-8')
                             new_opf = (_opf_to_horizontal(opf)
@@ -384,9 +387,6 @@ def process_epub_orientation(epub_path, output_path, target,
                             data = new_opf.encode('utf-8')
                         except Exception as e:
                             errors.append((name, str(e)))
-                        processed += 1
-                        if progress_callback:
-                            progress_callback(processed, total, name)
 
                     # mimetype must be stored uncompressed
                     if name == 'mimetype':
