@@ -2,6 +2,8 @@
 
 Automatically adds furigana (ruby annotations) to Japanese EPUB books in [Calibre](https://calibre-ebook.com). Powered by [pykakasi](https://github.com/miurahr/pykakasi) (bundled — no separate install needed).
 
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tobethesidekick)
+
 ---
 
 ## Features
