@@ -167,15 +167,6 @@ The button should be bottom-left for vertical text and bottom-right for horizont
 **After converting layout, toggle is still on the wrong side**
 Running **↔ Convert Layout…** updates the button position automatically. If you converted the EPUB by another tool outside Calibre, the position won't have been updated — fix it with a remove-then-re-add ruby cycle as above.
 
-**"git-credential-osxkeychain" password dialogs pile up when pushing to GitHub**
-macOS ships with `osxkeychain` as a system-wide git credential helper. GitHub no longer accepts passwords — git hangs asking for a token. Fix (one-time, in Terminal):
-```bash
-gh auth login          # authenticate via browser if not already done
-gh auth setup-git      # tell git to use gh's token instead of keychain
-sudo git config --system --unset credential.helper   # remove conflicting system helper
-```
-After these three commands, `git push` works silently with no dialogs.
-
 **Convert Layout produces no visible change**
 The book may already be in the target orientation, or the CSS uses a non-standard property that the converter doesn't recognise. Check: open the EPUB in Calibre's **Edit Book**, look at the main stylesheet for `writing-mode`. If it uses a custom wrapper class rather than `body`/`html`, the CSS transform still applies — reload the book in the viewer to see the effect.
 
