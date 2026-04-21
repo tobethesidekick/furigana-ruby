@@ -159,6 +159,24 @@ If a page has no auto-generated furigana (e.g. copyright/image pages), switching
 **Wrong readings on names**
 pykakasi cannot know character-specific name readings. Publisher-supplied ruby (if present) is always used instead of the auto reading for those words.
 
+**Toggle button appears on the wrong side**
+The button should be bottom-left for vertical text and bottom-right for horizontal text. If it's on the wrong side, the book was processed with an older version of the plugin. Fix: open **Edit Ruby…**, untick all levels → **Apply**, then re-tick your levels → **Apply**. The position is recalculated on re-add.
+
+**After converting layout, toggle is still on the wrong side**
+Running **↔ Convert Layout…** updates the button position automatically. If you converted the EPUB by another tool outside Calibre, the position won't have been updated — fix it with a remove-then-re-add ruby cycle as above.
+
+**"git-credential-osxkeychain" password dialogs pile up when pushing to GitHub**
+macOS ships with `osxkeychain` as a system-wide git credential helper. GitHub no longer accepts passwords — git hangs asking for a token. Fix (one-time, in Terminal):
+```bash
+gh auth login          # authenticate via browser if not already done
+gh auth setup-git      # tell git to use gh's token instead of keychain
+sudo git config --system --unset credential.helper   # remove conflicting system helper
+```
+After these three commands, `git push` works silently with no dialogs.
+
+**Convert Layout produces no visible change**
+The book may already be in the target orientation, or the CSS uses a non-standard property that the converter doesn't recognise. Check: open the EPUB in Calibre's **Edit Book**, look at the main stylesheet for `writing-mode`. If it uses a custom wrapper class rather than `body`/`html`, the CSS transform still applies — reload the book in the viewer to see the effect.
+
 ---
 
 ## License
