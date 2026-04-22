@@ -111,6 +111,7 @@ SOURCE_FILES = [
     'deps_loader.py',
     'furigana_engine.py',
     'jlpt_filter.py',
+    'lang_detect.py',
     'orientation_engine.py',
     'plugin-import-name-furigana_ruby.txt',
     'viewer_inject.css',

@@ -109,6 +109,15 @@ The toggle works identically in any browser — open Calibre's content server at
 
 ## Changelog
 
+### v1.2.1
+**New: CJK language detection**
+- Detects book language from EPUB metadata (`dc:language`) — Japanese, Chinese (Simplified/Traditional), or Korean
+- "Edit Ruby…" is disabled for Chinese and Korean books, where furigana doesn't apply
+- Per-document detection: HTML files that explicitly declare `lang="zh-*"` or `lang="ko-*"` are skipped during ruby annotation, so Chinese/Korean sections inside a primarily Japanese book are left untouched
+- Detected language is shown in the status dialog
+
+---
+
 ### v1.2.0
 **New: Vertical typography fixes for horizontal-origin EPUBs**
 

@@ -341,6 +341,16 @@ class FuriganaAction(InterfaceAction):
                 'No EPUB format found for this book.', show=True)
             return
 
+        # ── Detect book language ──────────────────────────────────
+        try:
+            from calibre_plugins.furigana_ruby.lang_detect import (
+                detect_book_language, lang_display)
+        except ImportError:
+            from lang_detect import detect_book_language, lang_display
+
+        lang_info    = detect_book_language(path)
+        ruby_allowed = not (lang_info['is_chinese'] or lang_info['is_korean'])
+
         db = self.gui.current_db.new_api
 
         # ── Build dialog ──────────────────────────────────────────
@@ -389,19 +399,36 @@ class FuriganaAction(InterfaceAction):
                 return
 
             title    = db.field_for('title', book_id) or 'this book'
-            has_auto = auto_count > 0
 
-            if auto_count == 0 and pub_count == 0:
+            # Language line (shown when detected)
+            lang_label = lang_display(lang_info)
+            lang_line  = (f'  Detected language:       {lang_label}\n\n'
+                          if lang_info['lang_raw'] else '')
+
+            if not ruby_allowed:
+                # Chinese / Korean book — ruby not applicable
+                status = (
+                    f'📖  "{title}"\n\n'
+                    f'{lang_line}'
+                    f'Ruby annotation is designed for Japanese text.\n'
+                    f'"Edit Ruby…" is unavailable for this book.\n\n'
+                    f'↔ Convert Layout is still available for\n'
+                    f'  vertical ↔ horizontal conversion.'
+                )
+            elif auto_count == 0 and pub_count == 0:
                 status = (f'❌  No ruby in "{title}"\n\n'
+                          f'{lang_line}'
                           f'No furigana annotations found.\n'
                           f'Click "Edit Ruby…" to add them.')
             elif auto_count == 0:
                 status = (f'📖  Publisher ruby only — "{title}"\n\n'
+                          f'{lang_line}'
                           f'  Publisher annotations:  {pub_count:,}\n'
                           f'  Auto-generated:         0\n\n'
                           f'Click "Edit Ruby…" to fill in remaining kanji.')
             else:
                 status = (f'✅  Furigana active — "{title}"\n\n'
+                          f'{lang_line}'
                           f'  Auto-generated (blue):   {auto_count:,}\n'
                           f'  Publisher (original):    {pub_count:,}\n'
                           f'  Files with ruby:         {file_count}\n\n'
@@ -472,6 +499,11 @@ class FuriganaAction(InterfaceAction):
         def on_viewer():
             dlg.reject()
             self._open_in_viewer(book_id)
+
+        # Disable Edit Ruby for non-Japanese books
+        if not ruby_allowed:
+            btn_edit.setEnabled(False)
+            btn_edit.setToolTip('Ruby annotation is for Japanese text only')
 
         btn_edit.clicked.connect(on_edit)
         btn_viewer.clicked.connect(on_viewer)

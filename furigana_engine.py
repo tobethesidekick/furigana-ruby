@@ -573,6 +573,18 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
         except Exception:
             pass
 
+    # Per-document language skip: import once before the loop
+    _should_skip_for_ruby = None
+    if mode == 'add':
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.lang_detect import should_skip_html_for_ruby
+            except ImportError:
+                from lang_detect import should_skip_html_for_ruby
+            _should_skip_for_ruby = should_skip_html_for_ruby
+        except Exception:
+            pass   # if import fails, process all files normally
+
     tmp = tempfile.mktemp(suffix='.epub')
     shutil.copy2(epub_path, tmp)
 
@@ -607,8 +619,13 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                         text = data.decode('utf-8')
                         before = text.count('class="auto"')
                         if mode == 'add':
-                            text = inject_furigana_html(text, annotate_levels=annotate_levels,
-                                                        btn_side=btn_side)
+                            if (_should_skip_for_ruby is not None
+                                    and _should_skip_for_ruby(text)):
+                                pass   # non-Japanese CJK file — leave untouched
+                            else:
+                                text = inject_furigana_html(
+                                    text, annotate_levels=annotate_levels,
+                                    btn_side=btn_side)
                         elif remove_levels is not None:
                             text = strip_auto_furigana_by_levels(text, remove_levels)
                         else:
