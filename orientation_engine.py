@@ -7,6 +7,8 @@ Handles:
   - CSS writing-mode declarations (with -webkit- and -epub- vendor prefixes)
   - OPF spine page-progression-direction
   - Inline style= attributes in HTML files
+  - Tate-chu-yoko (text-combine-upright) for digits and short Latin runs
+  - CJK corner-bracket substitution for Western curly quotes
   - Detection of current orientation from OPF / CSS
 
 No extra dependencies beyond Python stdlib.
@@ -196,6 +198,185 @@ def _inject_vertical_into_body(css):
     return css
 
 
+# ── Tate-chu-yoko CSS ────────────────────────────────────────────────────────
+
+_TCY_CSS_MARKER = 'Tate-chu-yoko — added by Furigana Ruby Plugin'
+
+_TCY_CSS_BLOCK = (
+    '\n/* Tate-chu-yoko — added by Furigana Ruby Plugin */\n'
+    '.tcy {\n'
+    '    text-combine-upright: all;\n'
+    '    -webkit-text-combine: horizontal;\n'
+    '    -ms-text-combine-horizontal: all;\n'
+    '}\n'
+)
+
+
+def _css_add_tcy(css):
+    """Append TCY CSS block once if not already present."""
+    if _TCY_CSS_MARKER in css:
+        return css
+    return css + _TCY_CSS_BLOCK
+
+
+def _css_remove_tcy(css):
+    """Remove the TCY CSS block injected by this plugin."""
+    return re.sub(
+        r'/\*\s*Tate-chu-yoko[^*]*\*/\s*\.tcy\s*\{[^}]*\}\s*',
+        '', css, flags=re.DOTALL)
+
+
+# ── HTML text-node processor ──────────────────────────────────────────────────
+
+# Tags whose text content must NOT be processed (layout/code/math/our own spans)
+_TEXT_SKIP_TAGS = frozenset([
+    'ruby', 'rt', 'rp',
+    'pre', 'code',
+    'script', 'style',
+    'head', 'title',
+    'math', 'svg',
+])
+
+
+def _process_html_text_nodes(html, text_fn):
+    """
+    Apply text_fn to every text node in an HTML document.
+
+    Skips text inside <ruby>, <rt>, <rp>, <pre>, <code>, <script>,
+    <style>, <head>, <math>, <svg>, and <span class="tcy"> so we never
+    double-wrap or corrupt markup.
+
+    text_fn(str) -> str
+    """
+    # Split into alternating [text, tag/comment, text, tag/comment, …]
+    parts = re.split(r'(<[^>]+>|<!--.*?-->)', html, flags=re.DOTALL)
+
+    result         = []
+    skip_depth     = 0   # depth inside _TEXT_SKIP_TAGS  (script/style/ruby/…)
+    tcy_span_depth = 0   # depth inside <span class="tcy"> — tracked separately
+                         # because closing </span> has no class attribute to
+                         # identify it, so it cannot use the same gate as opening
+
+    for part in parts:
+        if part.startswith('<') or part.startswith('<!--'):
+            result.append(part)
+            if part.startswith('<!--'):
+                continue
+
+            tag_m = re.match(r'<(/?)([A-Za-z][A-Za-z0-9]*)', part)
+            if not tag_m:
+                continue
+
+            is_closing     = tag_m.group(1) == '/'
+            tag_name       = tag_m.group(2).lower()
+            is_selfclosing = (not is_closing) and part.rstrip().endswith('/>')
+
+            # ── tcy span depth (open detected by class attr; close by tag name)
+            if tag_name == 'span':
+                if not is_closing and not is_selfclosing:
+                    # Opening <span> — is it a tcy span?
+                    if re.search(r'\bclass=["\'][^"\']*\btcy\b', part):
+                        tcy_span_depth += 1
+                elif is_closing and tcy_span_depth > 0:
+                    # Any closing </span> closes the innermost tracked tcy span
+                    tcy_span_depth -= 1
+
+            # ── regular skip-tag depth (script / style / ruby / pre / …)
+            if tag_name in _TEXT_SKIP_TAGS:
+                if is_closing:
+                    skip_depth = max(0, skip_depth - 1)
+                elif not is_selfclosing:
+                    skip_depth += 1
+
+        else:
+            # Text node — only transform when outside ALL skip zones
+            if skip_depth == 0 and tcy_span_depth == 0:
+                part = text_fn(part)
+            result.append(part)
+
+    return ''.join(result)
+
+
+# ── Tate-chu-yoko span wrapping ───────────────────────────────────────────────
+
+# Matches (all anchored to NOT be part of a longer run):
+#   • 1–4 consecutive digits, optionally followed by .digits (e.g. 2.0, 3.14)
+#     — covers single chapter numbers (第1章), years (2024), decimals (2.0)
+#   • 1–8 char Latin-led sequences (USB, iPhone, mvp, A)
+_TCY_RE = re.compile(r'\d{1,4}(?:\.\d{1,4})?|[A-Za-z][A-Za-z0-9]{0,7}')
+
+
+def _html_wrap_tcy(html):
+    """
+    Wrap digit runs and short Latin sequences in <span class="tcy"> so
+    they render upright (tate-chu-yoko) inside a vertical text column.
+    Skips text inside ruby/pre/code/script/style/head and existing .tcy spans.
+    """
+    def _wrap(text):
+        return _TCY_RE.sub(r'<span class="tcy">\g<0></span>', text)
+    return _process_html_text_nodes(html, _wrap)
+
+
+def _html_unwrap_tcy(html):
+    """Remove all <span class="tcy">…</span> spans added by this plugin."""
+    return re.sub(
+        r'<span\s+class=["\']tcy["\']>(.*?)</span>',
+        r'\1', html, flags=re.DOTALL)
+
+
+# ── Punctuation substitution ──────────────────────────────────────────────────
+
+# Western curly quotes → CJK corner brackets (H→V direction)
+# Reversed automatically for V→H.
+_PUNCT_TO_VERTICAL = [
+    ('\u201C', '\u300C'),  # " → 「
+    ('\u201D', '\u300D'),  # " → 」
+    ('\u2018', '\u300E'),  # ' → 『
+    ('\u2019', '\u300F'),  # ' → 』
+]
+# Period substitution is one-way only — we never reverse 。→. because the
+# original book may already have 。 that we must not corrupt on V→H.
+_PUNCT_TO_HORIZONTAL = [(v, h) for h, v in _PUNCT_TO_VERTICAL]
+
+# ASCII period NOT flanked by two Latin letters (exclude abbreviations like e.g.)
+_BARE_PERIOD_RE = re.compile(r'(?<![A-Za-z])\.(?![A-Za-z])')
+
+# Tab / multi-whitespace normaliser: in vertical text there are no tab stops,
+# so \t creates an ugly vertical gap; collapse to a single ideographic space.
+_TAB_RE = re.compile(r'\t+')
+
+
+def _html_punct_to_vertical(html):
+    """
+    In text nodes:
+      • Replace Western curly quotes with CJK corner brackets
+      • Replace bare ASCII period (.) with ideographic full stop (。)
+        — except when sandwiched between two Latin letters (abbreviations)
+        — decimal periods inside TCY spans are already protected
+      • Normalise tab characters to a single ideographic space (U+3000)
+    """
+    def _subst(text):
+        for src, dst in _PUNCT_TO_VERTICAL:
+            text = text.replace(src, dst)
+        text = _BARE_PERIOD_RE.sub('\u3002', text)   # . → 。
+        text = _TAB_RE.sub('\u3000', text)            # \t →
+        return text
+    return _process_html_text_nodes(html, _subst)
+
+
+def _html_punct_to_horizontal(html):
+    """
+    Reverse CJK corner brackets back to Western curly quotes in text nodes.
+    Undoes the quote part of _html_punct_to_vertical so round-trips are lossless.
+    (Period and tab normalisation are intentionally not reversed.)
+    """
+    def _subst(text):
+        for src, dst in _PUNCT_TO_HORIZONTAL:
+            text = text.replace(src, dst)
+        return text
+    return _process_html_text_nodes(html, _subst)
+
+
 # ── OPF transformations ───────────────────────────────────────────────────────
 
 def _opf_to_horizontal(opf):
@@ -314,10 +495,11 @@ def process_epub_orientation(epub_path, output_path, target,
     tmp = tempfile.mktemp(suffix='.epub')
     shutil.copy2(epub_path, tmp)
 
-    css_changed  = 0
-    html_changed = 0
-    opf_changed  = False
-    errors       = []
+    css_changed      = 0
+    html_changed     = 0
+    opf_changed      = False
+    errors           = []
+    tcy_css_injected = False   # inject TCY CSS into the first modified CSS file only
 
     try:
         with zipfile.ZipFile(tmp, 'r') as zin:
@@ -345,9 +527,15 @@ def process_epub_orientation(epub_path, output_path, target,
                             progress_callback(processed, total, name)
                         try:
                             css = data.decode('utf-8')
-                            new_css = (_css_to_horizontal(css)
-                                       if target == 'horizontal'
-                                       else _css_to_vertical(css))
+                            if target == 'horizontal':
+                                new_css = _css_to_horizontal(css)
+                                new_css = _css_remove_tcy(new_css)
+                            else:
+                                new_css = _css_to_vertical(css)
+                                # Inject TCY CSS into the first CSS file we touch
+                                if not tcy_css_injected:
+                                    new_css = _css_add_tcy(new_css)
+                                    tcy_css_injected = True
                             if new_css != css:
                                 css_changed += 1
                             data = new_css.encode('utf-8')
@@ -361,9 +549,14 @@ def process_epub_orientation(epub_path, output_path, target,
                             progress_callback(processed, total, name)
                         try:
                             html = data.decode('utf-8')
-                            new_html = (_html_inline_to_horizontal(html)
-                                        if target == 'horizontal'
-                                        else _html_inline_to_vertical(html))
+                            if target == 'horizontal':
+                                new_html = _html_inline_to_horizontal(html)
+                                new_html = _html_unwrap_tcy(new_html)
+                                new_html = _html_punct_to_horizontal(new_html)
+                            else:
+                                new_html = _html_inline_to_vertical(html)
+                                new_html = _html_wrap_tcy(new_html)
+                                new_html = _html_punct_to_vertical(new_html)
                             # Flip the embedded toggle button position to match new layout
                             new_html = _update_ruby_css_btn_position(new_html, target)
                             if new_html != html:

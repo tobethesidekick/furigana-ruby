@@ -102,16 +102,61 @@ def add_dir_to_zip(zf, src_dir, zip_prefix):
             added += 1
     return added
 
+# ── Source files that always override whatever is in the base zip ─────────────
+
+SOURCE_FILES = [
+    '__init__.py',
+    'action.py',
+    'config.py',
+    'deps_loader.py',
+    'furigana_engine.py',
+    'jlpt_filter.py',
+    'orientation_engine.py',
+    'plugin-import-name-furigana_ruby.txt',
+    'viewer_inject.css',
+    'viewer_inject.js',
+    'viewer_plugin.py',
+]
+SOURCE_DIRS = ['images']   # directories to include recursively
+
 print("Building plugin zip with bundled dependencies...")
 
 with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
-    # Copy all files from base zip
+    # 1. Copy base zip contents (provides any files we don't override)
     with zipfile.ZipFile(base_zip, 'r') as zin:
+        base_names = set(zin.namelist())
         for item in zin.infolist():
             zout.writestr(item, zin.read(item.filename))
     print(f"  + Copied base plugin files")
 
-    # Add each dependency package into bundled_deps/
+    # 2. Overlay updated source files from this directory (overrides base zip)
+    overridden = 0
+    for fname in SOURCE_FILES:
+        src = os.path.join(script_dir, fname)
+        if os.path.isfile(src):
+            with open(src, 'rb') as f:
+                data = f.read()
+            # ZipFile.writestr with an existing name appends a second entry;
+            # readers use the last entry, so this effectively overrides it.
+            zout.writestr(fname, data)
+            overridden += 1
+    for dname in SOURCE_DIRS:
+        src_dir = os.path.join(script_dir, dname)
+        if os.path.isdir(src_dir):
+            for root, dirs, files in os.walk(src_dir):
+                dirs[:] = [d for d in dirs if d != '__pycache__']
+                for fname in files:
+                    if fname.endswith('.pyc'):
+                        continue
+                    fpath = os.path.join(root, fname)
+                    arc   = os.path.relpath(fpath, script_dir)
+                    with open(fpath, 'rb') as f:
+                        data = f.read()
+                    zout.writestr(arc, data)
+                    overridden += 1
+    print(f"  + Overlaid {overridden} source files from {script_dir}")
+
+    # 3. Add each dependency package into bundled_deps/
     total_files = 0
     for dep, pkg_dir in pkg_dirs.items():
         n = add_dir_to_zip(zout, pkg_dir, f'bundled_deps/{dep}')

@@ -109,6 +109,27 @@ The toggle works identically in any browser — open Calibre's content server at
 
 ## Changelog
 
+### v1.2.0
+**New: Vertical typography fixes for horizontal-origin EPUBs**
+
+When converting a horizontal EPUB to vertical layout, characters written for screen reading often render incorrectly in a vertical column. This release fixes all common cases automatically.
+
+**Tate-chu-yoko (upright inline sequences)**
+- Numbers (`1`–`9999`) and short Latin runs (`USB`, `iPhone`, `mvp`, `AI`) now render upright in the vertical column via `text-combine-upright`
+- Covers single-digit chapter numbers (`第1章`–`第9章`), two-digit page counts, four-digit years, and version numbers (`2.0`, `3.14`)
+- Fully reversible: converting back to horizontal unwraps all spans cleanly
+
+**Punctuation normalisation**
+- Western curly quotes (`"…"` `'…'`) converted to CJK corner brackets (`「…」` `『…』`)
+- Bare ASCII period (`.`) converted to ideographic full stop (`。`) — skips abbreviations like `e.g.` and decimals inside tate-chu-yoko spans
+- Tab characters used for horizontal layout alignment replaced with an ideographic space (`　`) to avoid vertical column gaps
+
+**Bug fix — text nodes after the first wrapped span were silently skipped**
+- Root cause: closing `</span>` has no `class` attribute, so `is_tcy_span` was always `False` on the closing side. The skip-depth incremented for every `<span class="tcy">` opening but never decremented, causing all text nodes after the first wrapped digit or Latin word to be ignored by the punctuation pass.
+- Fix: `tcy_span_depth` is now tracked as a separate counter — openings detected by class attribute, closings detected by tag name alone.
+
+---
+
 ### v1.1.0
 **New: EPUB Layout Converter**
 - Added **↔ Convert Layout…** in the toolbar menu — converts any CJK EPUB between vertical (right-to-left columns) and horizontal text layout in one click
@@ -175,6 +196,15 @@ gh auth setup-git      # tell git to use gh's token instead of keychain
 sudo git config --system --unset credential.helper   # remove conflicting system helper
 ```
 After these three commands, `git push` works silently with no dialogs.
+
+**Some numbers or Latin letters still appear sideways after converting to vertical**
+This is expected for books converted with v1.1.0 or earlier. Re-run **↔ Convert Layout…** with v1.2.0+ — the converter now wraps digits and Latin runs in `text-combine-upright` spans automatically. If a character still appears sideways after reconverting, it is likely inside a CSS `<style>` block (a CSS property value, not visible text) and is not actually rendered to the screen.
+
+**Periods appear as sideways dashes in vertical text**
+The book was written for horizontal reading and uses ASCII `.` instead of the CJK ideographic full stop `。`. v1.2.0+ converts bare periods automatically during layout conversion. Re-run **↔ Convert Layout…** to apply the fix. Note: periods inside abbreviations (`e.g.`, `a.m.`) and decimal numbers (`2.0`) are intentionally preserved.
+
+**Extra vertical gaps in the table of contents after converting to vertical**
+The book uses tab characters for horizontal alignment in its TOC — a common horizontal-layout convention. v1.2.0+ replaces tabs with an ideographic space during conversion. Re-run **↔ Convert Layout…** to apply the fix.
 
 **Convert Layout produces no visible change**
 The book may already be in the target orientation, or the CSS uses a non-standard property that the converter doesn't recognise. Check: open the EPUB in Calibre's **Edit Book**, look at the main stylesheet for `writing-mode`. If it uses a custom wrapper class rather than `body`/`html`, the CSS transform still applies — reload the book in the viewer to see the effect.
