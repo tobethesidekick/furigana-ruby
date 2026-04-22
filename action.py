@@ -260,6 +260,10 @@ class FuriganaAction(InterfaceAction):
         a3.triggered.connect(self.show_about)
         self.menu.addAction(a3)
 
+        a4 = QAction('🔄 Check for Updates…', self.gui)
+        a4.triggered.connect(self.check_for_updates)
+        self.menu.addAction(a4)
+
     # ── Helpers ───────────────────────────────────────────────────
 
     def _selected_ids(self):
@@ -802,8 +806,10 @@ class FuriganaAction(InterfaceAction):
     # ── About ─────────────────────────────────────────────────────
 
     def show_about(self):
+        from calibre_plugins.furigana_ruby import FuriganaPluginBase
+        ver = '.'.join(str(x) for x in FuriganaPluginBase.version)
         info_dialog(self.gui, '振り仮名 Ruby Plugin',
-            '<h3>振り仮名 Ruby Plugin</h3>'
+            f'<h3>振り仮名 Ruby Plugin <span style="font-size:small;color:grey;">v{ver}</span></h3>'
             '<b>Workflow:</b><ol>'
             '<li>Select a Japanese EPUB in the library</li>'
             '<li>Click the <b>振り仮名 Ruby</b> toolbar button</li>'
@@ -819,3 +825,67 @@ class FuriganaAction(InterfaceAction):
             '<b>Auto ruby</b> appears in '
             '<span style="color:#4a72c4">blue</span>.',
             show=True)
+
+    # ── Update check ──────────────────────────────────────────────
+
+    def check_for_updates(self):
+        """
+        Query the GitHub releases API and compare with the installed version.
+        Shows a dialog with a download link if a newer release exists.
+        Uses only Python stdlib — no extra dependencies.
+        """
+        import json
+        from urllib.request import urlopen, Request
+        from urllib.error   import URLError
+        from calibre_plugins.furigana_ruby import FuriganaPluginBase
+
+        local     = FuriganaPluginBase.version           # e.g. (1, 2, 0)
+        local_str = '.'.join(str(x) for x in local)
+        api_url   = ('https://api.github.com/repos/'
+                     'tobethesidekick/furigana-ruby/releases/latest')
+        releases_url = ('https://github.com/tobethesidekick/'
+                        'furigana-ruby/releases/latest')
+
+        try:
+            req  = Request(api_url,
+                           headers={'User-Agent': 'FuriganaRuby-Calibre-Plugin'})
+            resp = urlopen(req, timeout=10)
+            data = json.loads(resp.read().decode('utf-8'))
+
+            tag       = data.get('tag_name', '').lstrip('v')   # "1.2.0"
+            parts     = [int(x) for x in tag.split('.') if x.isdigit()]
+            remote    = tuple(parts[:3])
+            remote_str = '.'.join(str(x) for x in remote)
+            html_url  = data.get('html_url', releases_url)
+
+            if remote > local:
+                info_dialog(
+                    self.gui, 'Update Available',
+                    f'<h3>🎉 Update available: v{remote_str}</h3>'
+                    f'Installed version: v{local_str}<br><br>'
+                    f'<a href="{html_url}">Download v{remote_str} from GitHub</a><br><br>'
+                    f'<small>Download <b>FuriganaRuby.zip</b>, then install via<br>'
+                    f'Calibre → Preferences → Plugins → Load plugin from file.</small>',
+                    show=True)
+            else:
+                info_dialog(
+                    self.gui, 'Up to Date',
+                    f'<h3>✓ You are up to date</h3>'
+                    f'Installed: v{local_str}<br><br>'
+                    f'<a href="{releases_url}">View releases on GitHub</a>',
+                    show=True)
+
+        except URLError as e:
+            info_dialog(
+                self.gui, 'Update Check Failed',
+                f'<b>Could not reach GitHub.</b><br><br>'
+                f'{e}<br><br>'
+                f'Check your internet connection or visit<br>'
+                f'<a href="{releases_url}">GitHub releases</a> manually.',
+                show=True)
+        except Exception as e:
+            info_dialog(
+                self.gui, 'Update Check Failed',
+                f'<b>Unexpected error:</b><br>{e}<br><br>'
+                f'<a href="{releases_url}">GitHub releases</a>',
+                show=True)
