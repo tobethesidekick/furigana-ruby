@@ -6,12 +6,77 @@ Book-level and document-level CJK language detection for EPUBs.
 Public API
 ----------
 detect_book_language(epub_path)       → lang_info dict
+detect_script_from_text(text)         → 'simplified' | 'traditional' | 'unknown'
+detect_script_from_epub(epub_path)    → 'simplified' | 'traditional' | 'unknown'
 should_skip_html_for_ruby(html)       → bool
 lang_display(lang_info)               → human-readable string
 """
 
 import re
 import zipfile
+
+
+# ── Script detection character sets ──────────────────────────────────────────
+#
+# Characters that appear ONLY in simplified Chinese text (never in traditional):
+_SIMP_ONLY = frozenset(
+    '来时这说话见开个们样过还给让头实国为会对无电动长门问学关岁'
+    '虽双点办欢间请谢边发书读语东从种车务经认义属专历总别处达'
+)
+# Their traditional-script counterparts (never appear in simplified):
+_TRAD_ONLY = frozenset(
+    '來時這說話見開個們樣過還給讓頭實國為會對無電動長門問學關歲'
+    '雖雙點辦歡間請謝邊發書讀語東從種車務經認義屬專歷總別處達'
+)
+
+
+def detect_script_from_text(text):
+    """
+    Count simplified-only vs traditional-only characters in *text*.
+
+    Returns 'simplified', 'traditional', or 'unknown' when inconclusive
+    (fewer than 10 discriminating characters found, or ratio < 2:1).
+    """
+    simp = sum(1 for c in text if c in _SIMP_ONLY)
+    trad = sum(1 for c in text if c in _TRAD_ONLY)
+    total = simp + trad
+    if total < 10:
+        return 'unknown'
+    if simp >= trad * 2:
+        return 'simplified'
+    if trad >= simp * 2:
+        return 'traditional'
+    return 'unknown'
+
+
+def detect_script_from_epub(epub_path, max_chars=6000):
+    """
+    Sample up to three content HTML files from the EPUB to detect script.
+    Returns 'simplified', 'traditional', or 'unknown'.
+    """
+    try:
+        with zipfile.ZipFile(epub_path, 'r') as zf:
+            names = zf.namelist()
+            content_files = [
+                n for n in names
+                if n.lower().endswith(('.html', '.xhtml', '.htm'))
+                and not any(skip in n.lower() for skip in ('nav', 'toc', 'cover'))
+            ]
+            sampled = ''
+            for name in content_files[:5]:
+                try:
+                    raw = zf.read(name).decode('utf-8', errors='ignore')
+                    text = re.sub(r'<[^>]+>', '', raw)
+                    sampled += text[:max_chars // 3]
+                    if len(sampled) >= max_chars:
+                        break
+                except Exception:
+                    continue
+            if sampled:
+                return detect_script_from_text(sampled)
+    except Exception:
+        pass
+    return 'unknown'
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

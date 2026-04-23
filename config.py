@@ -16,6 +16,8 @@ prefs = JSONConfig('plugins/furigana_ruby')
 prefs.defaults['annotate_levels']  = ['N1', 'N2', 'N3']   # default: N3+
 prefs.defaults['default_mode']     = 'all'
 prefs.defaults['show_toggle_btn']  = True
+prefs.defaults['s2t_variant']      = 's2tw'   # default S→T variant
+prefs.defaults['t2s_variant']      = 't2s'    # default T→S variant
 
 
 class ConfigWidget(QWidget):
@@ -125,6 +127,49 @@ class ConfigWidget(QWidget):
         )
         info.setWordWrap(True)
         layout.addWidget(info)
+
+        # ── Chinese conversion defaults ───────────────────────────
+        chinese_group = QGroupBox('Chinese Conversion Defaults')
+        chinese_layout = QVBoxLayout()
+
+        from calibre_plugins.furigana_ruby.chinese_engine import VARIANTS_S2T, VARIANTS_T2S
+
+        s2t_row = QHBoxLayout()
+        s2t_row.addWidget(QLabel('Simplified → Traditional variant:'))
+        self.s2t_combo = QComboBox()
+        for variant, label, *_ in VARIANTS_S2T:
+            self.s2t_combo.addItem(label, variant)
+        cur_s2t = prefs['s2t_variant']
+        for i, (v, *_) in enumerate(VARIANTS_S2T):
+            if v == cur_s2t:
+                self.s2t_combo.setCurrentIndex(i)
+                break
+        s2t_row.addWidget(self.s2t_combo)
+        chinese_layout.addLayout(s2t_row)
+
+        t2s_row = QHBoxLayout()
+        t2s_row.addWidget(QLabel('Traditional → Simplified variant:'))
+        self.t2s_combo = QComboBox()
+        for variant, label, *_ in VARIANTS_T2S:
+            self.t2s_combo.addItem(label, variant)
+        cur_t2s = prefs['t2s_variant']
+        for i, (v, *_) in enumerate(VARIANTS_T2S):
+            if v == cur_t2s:
+                self.t2s_combo.setCurrentIndex(i)
+                break
+        t2s_row.addWidget(self.t2s_combo)
+        chinese_layout.addLayout(t2s_row)
+
+        chinese_note = QLabel(
+            '<small><i>s2tw / s2twp recommended for Taiwan ebooks. '
+            'Phrase-level variants (s2twp, tw2sp) are slower but more accurate.</i></small>'
+        )
+        chinese_note.setWordWrap(True)
+        chinese_layout.addWidget(chinese_note)
+
+        chinese_group.setLayout(chinese_layout)
+        layout.addWidget(chinese_group)
+
         layout.addStretch()
 
     def _apply_preset(self, levels):
@@ -137,6 +182,8 @@ class ConfigWidget(QWidget):
         modes = ['all', 'publisher', 'off']
         prefs['default_mode']     = modes[self.mode_combo.currentIndex()]
         prefs['show_toggle_btn']  = self.btn_cb.isChecked()
+        prefs['s2t_variant']      = self.s2t_combo.currentData()
+        prefs['t2s_variant']      = self.t2s_combo.currentData()
 
     def get_annotate_levels(self):
         """Return current set of selected levels."""

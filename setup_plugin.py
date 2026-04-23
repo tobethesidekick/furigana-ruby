@@ -22,7 +22,7 @@ import shutil
 
 # ── Locate pykakasi on the system ────────────────────────────────────────────
 
-DEPS = ['pykakasi', 'jaconv', 'deprecated', 'wrapt']
+DEPS = ['pykakasi', 'jaconv', 'deprecated', 'wrapt', 'opencc']
 
 def find_package_dir(pkg_name):
     """Find the directory of an installed Python package."""
@@ -107,6 +107,7 @@ def add_dir_to_zip(zf, src_dir, zip_prefix):
 SOURCE_FILES = [
     '__init__.py',
     'action.py',
+    'chinese_engine.py',
     'config.py',
     'deps_loader.py',
     'furigana_engine.py',

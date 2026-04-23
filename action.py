@@ -15,17 +15,21 @@ try:
                                   QToolButton, QDialog, QVBoxLayout,
                                   QHBoxLayout, QCheckBox, QLabel,
                                   QGroupBox, QDialogButtonBox, QPushButton,
-                                  QSizePolicy, QTextEdit)
+                                  QSizePolicy, QTextEdit, QComboBox,
+                                  QRadioButton, QButtonGroup, QScrollArea,
+                                  QWidget)
     from PyQt6.QtCore import Qt, QThread, pyqtSignal
-    from PyQt6.QtGui import QIcon, QAction
+    from PyQt6.QtGui import QIcon, QAction, QPainter
     PYQT6 = True
 except ImportError:
     from PyQt5.Qt import (QMenu, QProgressDialog, QApplication,
                            QToolButton, QDialog, QVBoxLayout,
                            QHBoxLayout, QCheckBox, QLabel,
                            QGroupBox, QDialogButtonBox, QPushButton,
-                           QSizePolicy, QTextEdit,
-                           Qt, QThread, pyqtSignal, QIcon, QAction)
+                           QSizePolicy, QTextEdit, QComboBox,
+                           QRadioButton, QButtonGroup, QScrollArea,
+                           QWidget, Qt, QThread, pyqtSignal, QIcon, QAction,
+                           QPainter)
     PYQT6 = False
 
 from calibre.gui2.actions import InterfaceAction
@@ -134,6 +138,142 @@ class LevelManageDialog(QDialog):
 
     def selected_levels(self):
         return {lvl for lvl, cb in self._cbs.items() if cb.isChecked()}
+
+
+# ── Chinese conversion worker ─────────────────────────────────────────────────
+
+class ElidedLabel(QLabel):
+    """
+    A QLabel that elides text with '…' when it doesn't fit,
+    and emits clicked() on mouse press so it can act as a
+    clickable title alongside a QCheckBox.
+    """
+    clicked = pyqtSignal()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        fm = self.fontMetrics()
+        try:
+            elide_mode = Qt.TextElideMode.ElideRight
+            align      = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        except AttributeError:
+            elide_mode = Qt.ElideRight
+            align      = Qt.AlignLeft | Qt.AlignVCenter
+        elided = fm.elidedText(self.text(), elide_mode, self.width())
+        painter.drawText(self.rect(), align, elided)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ChineseWorker(QThread):
+    """
+    Processes one book at a time (all its convertible formats).
+
+    Signals
+    -------
+    book_started(book_id)              — fired just before a book begins
+    book_finished(book_id, ok, msg)    — fired after all formats for a book complete
+    finished(ok, results, traceback)   — fired when all books are done
+        results = list of (book_id, fmt, tmp_path_or_None, error_or_None)
+    """
+    book_started  = pyqtSignal(int)             # book_id
+    book_finished = pyqtSignal(int, bool, str)  # book_id, all_ok, summary_msg
+    finished      = pyqtSignal(bool, list, str) # ok, results, traceback
+
+    def __init__(self, tasks, variant):
+        super().__init__()
+        self.tasks   = tasks
+        self.variant = variant
+
+    def run(self):
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.chinese_engine import (
+                    convert_epub_s2t, convert_txt_s2t,
+                    convert_html_s2t, convert_fb2_s2t)
+            except ImportError:
+                from chinese_engine import (convert_epub_s2t, convert_txt_s2t,
+                                            convert_html_s2t, convert_fb2_s2t)
+
+            results = []
+
+            for task in self.tasks:
+                self.book_started.emit(task['book_id'])
+                fmt_results = []   # (fmt, ok, error_str)
+
+                # ── EPUB ──────────────────────────────────────
+                if task['epub']:
+                    tmp = tempfile.mktemp(suffix='.epub')
+                    try:
+                        convert_epub_s2t(task['epub'], tmp,
+                                         variant=self.variant)
+                        results.append((task['book_id'], 'EPUB', tmp, None))
+                        fmt_results.append(('EPUB', True, ''))
+                    except Exception as e:
+                        try: os.unlink(tmp)
+                        except: pass
+                        results.append((task['book_id'], 'EPUB', None, str(e)))
+                        fmt_results.append(('EPUB', False, str(e)))
+
+                # ── HTML ──────────────────────────────────────
+                if task.get('html'):
+                    tmp = tempfile.mktemp(suffix='.html')
+                    try:
+                        convert_html_s2t(task['html'], tmp,
+                                         variant=self.variant)
+                        results.append((task['book_id'], 'HTML', tmp, None))
+                        fmt_results.append(('HTML', True, ''))
+                    except Exception as e:
+                        try: os.unlink(tmp)
+                        except: pass
+                        results.append((task['book_id'], 'HTML', None, str(e)))
+                        fmt_results.append(('HTML', False, str(e)))
+
+                # ── FB2 ───────────────────────────────────────
+                if task.get('fb2'):
+                    tmp = tempfile.mktemp(suffix='.fb2')
+                    try:
+                        convert_fb2_s2t(task['fb2'], tmp,
+                                        variant=self.variant)
+                        results.append((task['book_id'], 'FB2', tmp, None))
+                        fmt_results.append(('FB2', True, ''))
+                    except Exception as e:
+                        try: os.unlink(tmp)
+                        except: pass
+                        results.append((task['book_id'], 'FB2', None, str(e)))
+                        fmt_results.append(('FB2', False, str(e)))
+
+                # ── TXT ───────────────────────────────────────
+                if task.get('txt'):
+                    tmp = tempfile.mktemp(suffix='.txt')
+                    try:
+                        convert_txt_s2t(task['txt'], tmp,
+                                        variant=self.variant)
+                        results.append((task['book_id'], 'TXT', tmp, None))
+                        fmt_results.append(('TXT', True, ''))
+                    except Exception as e:
+                        try: os.unlink(tmp)
+                        except: pass
+                        results.append((task['book_id'], 'TXT', None, str(e)))
+                        fmt_results.append(('TXT', False, str(e)))
+
+                # Summarise per-book result
+                all_ok   = all(r[1] for r in fmt_results)
+                ok_fmts  = [r[0] for r in fmt_results if r[1]]
+                err_msgs = [f'{r[0]}: {r[2]}' for r in fmt_results if not r[1]]
+                if all_ok:
+                    msg = ', '.join(ok_fmts)
+                else:
+                    msg = '; '.join(err_msgs)
+                self.book_finished.emit(task['book_id'], all_ok, msg)
+
+            self.finished.emit(True, results, '')
+
+        except Exception:
+            import traceback
+            self.finished.emit(False, [], traceback.format_exc())
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -253,6 +393,10 @@ class FuriganaAction(InterfaceAction):
         a2 = QAction('↔ Convert Layout…', self.gui)
         a2.triggered.connect(self.open_orientation_dialog)
         self.menu.addAction(a2)
+
+        a_zh = QAction('繁 Convert Chinese S↔T…', self.gui)
+        a_zh.triggered.connect(self.open_chinese_dialog)
+        self.menu.addAction(a_zh)
 
         self.menu.addSeparator()
 
@@ -832,6 +976,713 @@ class FuriganaAction(InterfaceAction):
         btn_convert.clicked.connect(on_convert)
         btn_viewer.clicked.connect(on_viewer)
         btn_close.clicked.connect(dlg.reject)
+
+        dlg.exec() if PYQT6 else dlg.exec_()
+
+    # ── Chinese S↔T conversion ────────────────────────────────────
+
+    def open_chinese_dialog(self):
+        ids = self._selected_ids()
+        if not ids:
+            warning_dialog(self.gui, 'No Book Selected',
+                'Select one or more Chinese EPUB/TXT books first.', show=True)
+            return
+        self._show_chinese_dialog(ids)
+
+    def _show_chinese_dialog(self, book_ids):
+        try:
+            from calibre_plugins.furigana_ruby.lang_detect import (
+                detect_book_language, lang_display,
+                detect_script_from_epub, detect_script_from_text)
+            from calibre_plugins.furigana_ruby.chinese_engine import (
+                VARIANTS_S2T, VARIANTS_T2S)
+        except ImportError:
+            from lang_detect import (detect_book_language, lang_display,
+                                     detect_script_from_epub, detect_script_from_text)
+            from chinese_engine import VARIANTS_S2T, VARIANTS_T2S
+
+        from calibre.utils.config import JSONConfig
+        prefs = JSONConfig('plugins/furigana_ruby')
+        prefs.defaults['s2t_variant'] = 's2tw'
+        prefs.defaults['t2s_variant'] = 't2s'
+
+        db = self.gui.current_db.new_api
+
+        # ── Scan selected books ───────────────────────────────────
+        book_rows = []
+        excluded_counts = {}   # language label → count of books not listed
+
+        for book_id in book_ids:
+            title     = db.field_for('title', book_id) or f'Book {book_id}'
+            epub_path = (db.format_abspath(book_id, 'EPUB')
+                         if db.has_format(book_id, 'EPUB') else None)
+            html_path = (db.format_abspath(book_id, 'HTML')
+                         if db.has_format(book_id, 'HTML') else None)
+            fb2_path  = (db.format_abspath(book_id, 'FB2')
+                         if db.has_format(book_id, 'FB2')  else None)
+            txt_path  = (db.format_abspath(book_id, 'TXT')
+                         if db.has_format(book_id, 'TXT')  else None)
+            if not epub_path and not html_path and not fb2_path and not txt_path:
+                excluded_counts['no supported format'] = (
+                    excluded_counts.get('no supported format', 0) + 1)
+                continue
+
+            if epub_path:
+                lang_info = detect_book_language(epub_path)
+            else:
+                lang_info = {'lang_raw': '', 'is_japanese': False,
+                             'is_chinese': False, 'is_korean': False,
+                             'is_simplified': False, 'is_traditional': False}
+                # Sample from the best available non-EPUB format
+                sample_path = html_path or fb2_path or txt_path
+                if sample_path:
+                    try:
+                        with open(sample_path, 'r',
+                                  encoding='utf-8', errors='ignore') as f:
+                            sample = f.read(4000)
+                        has_kana = any(0x3040 <= ord(c) <= 0x30FF for c in sample)
+                        has_han  = any(0x4E00 <= ord(c) <= 0x9FFF for c in sample)
+                        if has_han and not has_kana:
+                            lang_info['is_chinese'] = True
+                    except Exception:
+                        pass
+
+            # If Chinese but script not specified in metadata, detect from content
+            if (lang_info['is_chinese']
+                    and not lang_info['is_simplified']
+                    and not lang_info['is_traditional']):
+                if epub_path:
+                    script = detect_script_from_epub(epub_path)
+                else:
+                    sample_path = html_path or fb2_path or txt_path
+                    try:
+                        with open(sample_path, 'r',
+                                  encoding='utf-8', errors='ignore') as f:
+                            script = detect_script_from_text(f.read(6000))
+                    except Exception:
+                        script = 'unknown'
+                if script == 'simplified':
+                    lang_info['is_simplified'] = True
+                elif script == 'traditional':
+                    lang_info['is_traditional'] = True
+
+            # Japanese and Korean: excluded from the list but counted for the summary
+            if lang_info['is_japanese']:
+                excluded_counts['Japanese'] = excluded_counts.get('Japanese', 0) + 1
+                continue
+            if lang_info['is_korean']:
+                excluded_counts['Korean'] = excluded_counts.get('Korean', 0) + 1
+                continue
+
+            book_rows.append({'book_id': book_id, 'title': title,
+                               'epub': epub_path, 'html': html_path,
+                               'fb2': fb2_path,  'txt': txt_path,
+                               'lang_info': lang_info})
+
+        total_selected = len(book_ids)
+        n_chinese      = len(book_rows)
+
+        def _selection_summary():
+            """One-line breakdown of the full selection for the summary panel."""
+            parts = []
+            if n_chinese:
+                parts.append(f'{n_chinese} Chinese')
+            for lang, count in excluded_counts.items():
+                if lang != 'no supported format':
+                    parts.append(f'{count} {lang}')
+            if excluded_counts.get('no supported format', 0):
+                parts.append(
+                    f"{excluded_counts['no supported format']} without supported format")
+            breakdown = ' · '.join(parts) if parts else 'none'
+            lines = [f'Selection: {total_selected} book(s) — {breakdown}']
+            excluded_non_chinese = {k: v for k, v in excluded_counts.items()
+                                    if k != 'no EPUB/TXT'}
+            if excluded_non_chinese:
+                exc_str = '  and  '.join(
+                    f'{v} {k}' for k, v in excluded_non_chinese.items())
+                lines.append(
+                    f'{exc_str} book(s) not listed — Chinese conversion only.')
+            return '\n'.join(lines)
+
+        if not book_rows:
+            # All selected books are non-Chinese — show dialog anyway so the
+            # summary explains why nothing is listed
+            summary_only = True
+        else:
+            summary_only = False
+
+        # ── Build dialog ──────────────────────────────────────────
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('Convert Chinese S↔T')
+        dlg.setMinimumWidth(680)
+        dlg.resize(700, 520)
+
+        vl = QVBoxLayout()
+        vl.setSpacing(8)
+        dlg.setLayout(vl)
+
+        # Direction
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel('<b>Direction:</b>'))
+        rb_s2t = QRadioButton('Simplified → Traditional  (S→T)')
+        rb_t2s = QRadioButton('Traditional → Simplified  (T→S)')
+        rb_s2t.setChecked(True)
+        dir_row.addWidget(rb_s2t)
+        dir_row.addWidget(rb_t2s)
+        dir_row.addStretch()
+        vl.addLayout(dir_row)
+
+        # Variant
+        var_row = QHBoxLayout()
+        var_row.addWidget(QLabel('Variant:'))
+        var_combo = QComboBox()
+        var_combo.setMinimumWidth(300)
+        var_row.addWidget(var_combo)
+        var_row.addStretch()
+        vl.addLayout(var_row)
+
+        var_desc_lbl = QLabel('')
+        var_desc_lbl.setWordWrap(True)
+        var_desc_lbl.setStyleSheet('color: #545454; font-size: 11px; padding-left: 60px;')
+        vl.addWidget(var_desc_lbl)
+
+        # Metadata checkbox
+        meta_cb = QCheckBox('Also update title and author metadata')
+        meta_cb.setChecked(True)
+        vl.addWidget(meta_cb)
+
+        # Book list header — styled like a table header row.
+        # Use object-name selector so child widgets don't inherit the border.
+        hdr_widget = QWidget()
+        hdr_widget.setObjectName('bookListHeader')
+        hdr_widget.setStyleSheet(
+            '#bookListHeader { background-color: #d4d4d4; '
+            'border: 1px solid #b8b8b8; border-bottom: none; }')
+        hdr_layout = QHBoxLayout()
+        hdr_layout.setContentsMargins(4, 3, 4, 3)
+        hdr_layout.setSpacing(4)
+
+        header_cb = QCheckBox()
+        header_cb.setTristate(True)
+        header_cb.setToolTip('Select / deselect all applicable books')
+
+        # Fixed-width wrapper — centered so checkbox aligns with row checkboxes
+        hdr_cb_box = QWidget()
+        hdr_cb_box.setFixedWidth(20)
+        hdr_cb_inner = QHBoxLayout()
+        hdr_cb_inner.setContentsMargins(0, 0, 0, 0)
+        hdr_cb_inner.setSpacing(0)
+        hdr_cb_inner.addStretch()
+        hdr_cb_inner.addWidget(header_cb)
+        hdr_cb_inner.addStretch()
+        hdr_cb_box.setLayout(hdr_cb_inner)
+
+        hdr_books_lbl = QLabel('<b>Books</b>')
+        hdr_status_lbl = QLabel('<b>Status</b>')
+        hdr_status_lbl.setMinimumWidth(170)
+        try:
+            hdr_status_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        except AttributeError:
+            hdr_status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        hdr_layout.addWidget(hdr_cb_box)
+        hdr_layout.addWidget(hdr_books_lbl, 3)
+        hdr_layout.addWidget(hdr_status_lbl, 1)
+        hdr_widget.setLayout(hdr_layout)
+
+        # Scrollable book list — border joins flush with header bottom
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet('QScrollArea { border: 1px solid #b8b8b8; border-top: none; }')
+        sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        scroll.setSizePolicy(sp.Expanding, sp.Expanding)
+
+        # Wrap header + scroll in a zero-spacing container so they sit flush
+        table_container = QWidget()
+        table_vl = QVBoxLayout()
+        table_vl.setSpacing(0)
+        table_vl.setContentsMargins(0, 0, 0, 0)
+        table_vl.addWidget(hdr_widget)
+        table_vl.addWidget(scroll)
+        table_container.setLayout(table_vl)
+
+        list_widget = QWidget()
+        list_layout = QVBoxLayout()
+        list_layout.setSpacing(3)
+        list_layout.setContentsMargins(4, 4, 4, 4)
+        list_widget.setLayout(list_layout)
+
+        checkboxes    = []   # parallel to book_rows
+        status_labels = {}   # book_id → QLabel
+        title_labels  = {}   # book_id → ElidedLabel
+        sub_labels    = {}   # book_id → QLabel  (language · formats [· reason])
+        sub_base_text = {}   # book_id → plain "lang  ·  fmts" (no reason suffix)
+        cb_map        = {}   # book_id → QCheckBox (for _apply_row_style)
+
+        _SUB_STYLE = 'color: #545454; font-size: 11px;'
+
+        def _script_label(li):
+            """Return a human-readable script label for the language column."""
+            if li.get('is_simplified'):
+                return 'Simplified (简体)'
+            if li.get('is_traditional'):
+                return 'Traditional (繁體)'
+            if li.get('is_chinese'):
+                return 'Chinese (中文)'
+            return lang_display(li)
+
+        sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
+
+        for row in book_rows:
+            li   = row['lang_info']
+            lang = _script_label(li)
+            fmts = '  '.join(f for f, p in [('EPUB', row['epub']),
+                                              ('HTML', row['html']),
+                                              ('FB2',  row['fb2']),
+                                              ('TXT',  row['txt'])] if p)
+
+            # ── Checkbox in fixed-width wrapper so alignment holds when hidden
+            cb = QCheckBox()
+            cb_box = QWidget()
+            cb_box.setFixedWidth(20)
+            cb_box_inner = QHBoxLayout()
+            cb_box_inner.setContentsMargins(0, 0, 0, 0)
+            cb_box_inner.setSpacing(0)
+            cb_box_inner.addStretch()
+            cb_box_inner.addWidget(cb)
+            cb_box_inner.addStretch()
+            cb_box.setLayout(cb_box_inner)
+
+            # ── Title (eliding, clickable — toggles the checkbox)
+            title_lbl = ElidedLabel(row['title'])
+            title_lbl.setToolTip(row['title'])
+            title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
+            title_lbl.clicked.connect(
+                lambda _=None, c=cb: c.toggle() if c.isVisible() and c.isEnabled() else None)
+
+            # ── Status (right column, left-aligned to match header)
+            status_lbl = QLabel('')
+            try:
+                status_lbl.setAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            except AttributeError:
+                status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            status_lbl.setMinimumWidth(170)
+
+            # ── Sub-label: language · formats  (reason appended when disabled)
+            _base = f'{lang}  ·  {fmts}'
+            sub_lbl = QLabel(_base)
+            sub_lbl.setStyleSheet(_SUB_STYLE)
+
+            # ── Top row: [cb_box][title ×3] [status ×1]
+            top_row = QHBoxLayout()
+            top_row.setSpacing(4)
+            top_row.setContentsMargins(0, 0, 0, 0)
+            top_row.addWidget(cb_box)
+            top_row.addWidget(title_lbl, 3)
+            top_row.addWidget(status_lbl, 1)
+
+            # ── Sub row: indented 24 px to align under title
+            sub_row = QHBoxLayout()
+            sub_row.setContentsMargins(24, 0, 0, 2)
+            sub_row.addWidget(sub_lbl)
+            sub_row.addStretch()
+
+            # ── Container
+            container_layout = QVBoxLayout()
+            container_layout.setSpacing(1)
+            container_layout.setContentsMargins(4, 4, 4, 4)
+            container_layout.addLayout(top_row)
+            container_layout.addLayout(sub_row)
+
+            container = QWidget()
+            container.setLayout(container_layout)
+            list_layout.addWidget(container)
+
+            checkboxes.append(cb)
+            cb_map[row['book_id']]        = cb
+            status_labels[row['book_id']] = status_lbl
+            title_labels[row['book_id']]  = title_lbl
+            sub_labels[row['book_id']]    = sub_lbl
+            sub_base_text[row['book_id']] = _base
+
+        list_layout.addStretch()
+        scroll.setWidget(list_widget)
+        vl.addWidget(table_container)
+
+        # Summary panel — visible from open, updated after Apply
+        sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        result_te = QTextEdit()
+        result_te.setReadOnly(True)
+        result_te.setFixedHeight(80)
+        result_te.setSizePolicy(sp2.Expanding, sp2.Fixed)
+        result_te.setPlainText(_selection_summary())
+        vl.addWidget(result_te)
+
+        # Buttons
+        try:
+            std = QDialogButtonBox.StandardButton
+            bb  = QDialogButtonBox(std.Ok | std.Close)
+        except AttributeError:
+            bb  = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Close)
+        ok_btn = bb.button(
+            QDialogButtonBox.StandardButton.Ok if PYQT6 else QDialogButtonBox.Ok)
+        if ok_btn:
+            ok_btn.setText('Apply')
+        close_btn = bb.button(
+            QDialogButtonBox.StandardButton.Close if PYQT6
+            else QDialogButtonBox.Close)
+        bb.accepted.connect(lambda: _on_apply())
+        bb.rejected.connect(dlg.reject)
+        vl.addWidget(bb)
+
+        # ── Logic helpers ─────────────────────────────────────────
+
+        def _is_applicable(lang_info, going_s2t):
+            """
+            True if this book (already known to be Chinese or unknown) can be
+            meaningfully converted in the given direction.
+            - Simplified  → S→T only
+            - Traditional → T→S only
+            - Unknown Chinese (bare zh) or no metadata → both directions
+            """
+            li = lang_info
+            if not li['is_chinese']:
+                return True   # unknown metadata — show as applicable, let user decide
+            if going_s2t:
+                return li['is_simplified'] or not li['is_traditional']
+            else:
+                return li['is_traditional'] or not li['is_simplified']
+
+        def _update_apply_state():
+            """Enable Apply iff at least one applicable book is checked."""
+            any_checked = any(
+                cb.isChecked() and cb.isVisible() for cb in checkboxes)
+            if ok_btn:
+                ok_btn.setEnabled(any_checked)
+                if not any_checked:
+                    ok_btn.setToolTip(
+                        'No books are selected. Books already in the target '
+                        'variant are disabled.')
+                else:
+                    ok_btn.setToolTip('')
+            _update_header_cb()
+
+        def _already_status(lang_info, going_s2t):
+            """Return a status label for rows that don't need conversion."""
+            li = lang_info
+            if going_s2t and li.get('is_traditional'):
+                return 'Already Traditional'
+            if not going_s2t and li.get('is_simplified'):
+                return 'Already Simplified'
+            return ''
+
+        def _update_header_cb():
+            """Sync header tri-state checkbox to current row selection state."""
+            applicable_cbs = [cb for cb in checkboxes if cb.isVisible()]
+            header_cb.blockSignals(True)
+            try:
+                if not applicable_cbs:
+                    state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                else:
+                    n_checked = sum(1 for cb in applicable_cbs if cb.isChecked())
+                    if n_checked == 0:
+                        state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                    elif n_checked == len(applicable_cbs):
+                        state = (Qt.CheckState.Checked if PYQT6 else Qt.Checked)
+                    else:
+                        state = (Qt.CheckState.PartiallyChecked
+                                 if PYQT6 else Qt.PartiallyChecked)
+                header_cb.setCheckState(state)
+            except AttributeError:
+                pass
+            finally:
+                header_cb.blockSignals(False)
+
+        def _on_header_clicked():
+            """All checked → uncheck all; otherwise → check all applicable."""
+            applicable_cbs = [cb for cb in checkboxes if cb.isVisible()]
+            all_checked = (bool(applicable_cbs) and
+                           all(cb.isChecked() for cb in applicable_cbs))
+            for cb in applicable_cbs:
+                cb.setChecked(not all_checked)
+            _update_apply_state()
+
+        def _apply_row_style(row, applicable, going_s2t, preserve_status=False):
+            """Update visual style for a single book row."""
+            bid    = row['book_id']
+            cb     = cb_map[bid]
+            tl     = title_labels[bid]
+            sl     = sub_labels[bid]
+            lbl    = status_labels[bid]
+            base   = sub_base_text[bid]
+            reason = _already_status(row['lang_info'], going_s2t)
+
+            tl.setStyleSheet('')   # title always black
+
+            # Show checkbox only for applicable rows; wrapper keeps alignment
+            cb.setVisible(applicable)
+
+            # Sub-label always shows plain "lang · formats" — no reason suffix
+            sl.setText(base)
+            sl.setStyleSheet(_SUB_STYLE)
+
+            if applicable:
+                if not preserve_status:
+                    lbl.setText('')
+                    lbl.setStyleSheet('')
+            else:
+                # Right-side status column shows why no checkbox is present
+                if not preserve_status or not (
+                        lbl.text().startswith('✅') or lbl.text().startswith('⚠')):
+                    lbl.setText(reason)
+                    lbl.setStyleSheet('color: #595959;')
+
+        def _refresh_checks():
+            """Re-evaluate enabled/checked/visible state for all rows. Resets status labels."""
+            going_s2t = rb_s2t.isChecked()
+            for cb, row in zip(checkboxes, book_rows):
+                applicable = _is_applicable(row['lang_info'], going_s2t)
+                cb.setVisible(applicable)
+                cb.setEnabled(applicable)
+                cb.setChecked(applicable)
+                _apply_row_style(row, applicable, going_s2t, preserve_status=False)
+            _update_apply_state()
+
+        def _restore_cb_enabled():
+            """Re-enable applicable checkboxes after processing; preserve result
+            status labels (✅ / ⚠) but update 'already' labels on newly disabled rows."""
+            going_s2t = rb_s2t.isChecked()
+            for cb, row in zip(checkboxes, book_rows):
+                applicable = _is_applicable(row['lang_info'], going_s2t)
+                cb.setVisible(applicable)
+                cb.setEnabled(applicable)
+                _apply_row_style(row, applicable, going_s2t, preserve_status=True)
+            _update_apply_state()
+
+        def _update_var_desc():
+            variants = VARIANTS_S2T if rb_s2t.isChecked() else VARIANTS_T2S
+            idx = var_combo.currentIndex()
+            if 0 <= idx < len(variants):
+                var_desc_lbl.setText(variants[idx][3])
+            else:
+                var_desc_lbl.setText('')
+
+        def _refresh_variants():
+            var_combo.blockSignals(True)
+            var_combo.clear()
+            variants = VARIANTS_S2T if rb_s2t.isChecked() else VARIANTS_T2S
+            saved    = prefs['s2t_variant'] if rb_s2t.isChecked() else prefs['t2s_variant']
+            for v, label, _dir, _desc in variants:
+                var_combo.addItem(label, v)
+            for i, (v, *_) in enumerate(variants):
+                if v == saved:
+                    var_combo.setCurrentIndex(i)
+                    break
+            var_combo.blockSignals(False)
+            _update_var_desc()
+            _refresh_checks()
+
+        def _lock_controls():
+            """Disable everything during processing."""
+            rb_s2t.setEnabled(False)
+            rb_t2s.setEnabled(False)
+            var_combo.setEnabled(False)
+            meta_cb.setEnabled(False)
+            header_cb.setEnabled(False)
+            for cb in checkboxes:
+                cb.setEnabled(False)
+
+        def _unlock_controls():
+            """Re-enable top controls; checkboxes restored by _restore_cb_enabled."""
+            rb_s2t.setEnabled(True)
+            rb_t2s.setEnabled(True)
+            var_combo.setEnabled(True)
+            meta_cb.setEnabled(True)
+            header_cb.setEnabled(True)
+            _restore_cb_enabled()
+
+        # Wire up signals
+        rb_s2t.toggled.connect(lambda _: _refresh_variants())
+        var_combo.currentIndexChanged.connect(lambda _: _update_var_desc())
+        for cb in checkboxes:
+            cb.stateChanged.connect(lambda _: _update_apply_state())
+        header_cb.clicked.connect(_on_header_clicked)
+
+        # Initial populate
+        _refresh_variants()
+
+        if summary_only:
+            # No Chinese books — disable everything except Close
+            _lock_controls()
+            if ok_btn:
+                ok_btn.setEnabled(False)
+                ok_btn.setToolTip('No Chinese books in selection.')
+
+        # ── Apply handler ─────────────────────────────────────────
+
+        def _on_apply():
+            tasks = [row for cb, row in zip(checkboxes, book_rows)
+                     if cb.isChecked()]
+            if not tasks:
+                return
+
+            going_s2t = rb_s2t.isChecked()
+            variant   = var_combo.currentData()
+            direction = 'S→T' if going_s2t else 'T→S'
+            if not variant:
+                return
+
+            _lock_controls()
+            if ok_btn:
+                ok_btn.setEnabled(False)
+            result_te.setVisible(False)
+            QApplication.processEvents()
+
+            # Reset status labels for the books being processed
+            for row in tasks:
+                lbl = status_labels[row['book_id']]
+                lbl.setText('')
+                lbl.setStyleSheet('')
+
+            done    = [False]
+            outcome = [None]
+
+            worker = ChineseWorker(tasks, variant)
+
+            def on_book_started(book_id):
+                lbl = status_labels.get(book_id)
+                if lbl:
+                    lbl.setText('⏳ Converting…')
+                    lbl.setStyleSheet('color: #545454;')
+
+            def on_book_finished(book_id, ok, msg):
+                lbl = status_labels.get(book_id)
+                if lbl:
+                    if ok:
+                        lbl.setText('✅ Done')
+                        lbl.setStyleSheet('color: green;')
+                    else:
+                        lbl.setText('⚠ Error')
+                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip(msg)
+
+            def on_done(ok, results, tb):
+                done[0]    = True
+                outcome[0] = (ok, results, tb)
+
+            worker.book_started.connect(on_book_started)
+            worker.book_finished.connect(on_book_finished)
+            worker.finished.connect(on_done)
+            worker.start()
+
+            while not done[0]:
+                QApplication.processEvents()
+
+            worker.wait()
+
+            ok2, results, tb = outcome[0]
+
+            if not ok2:
+                result_te.setPlainText(f'⚠ Unexpected error:\n{tb}')
+                result_te.setVisible(True)
+                _unlock_controls()
+                _update_apply_state()
+                return
+
+            # Save converted files back to Calibre
+            saved       = 0
+            save_errors = []
+            for book_id, fmt, tmp_path, err in results:
+                lbl = status_labels.get(book_id)
+                if err or not tmp_path:
+                    save_errors.append(f'{fmt} ({book_id}): {err}')
+                    if lbl and lbl.text() != '⚠ Error':
+                        lbl.setText('⚠ Conv. error')
+                        lbl.setStyleSheet('color: red;')
+                    continue
+                try:
+                    db.add_format(book_id, fmt, tmp_path, replace=True)
+                    saved += 1
+                except Exception as e:
+                    save_errors.append(f'{fmt} ({book_id}): save failed: {e}')
+                    if lbl:
+                        lbl.setText('⚠ Save error')
+                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip(str(e))
+                finally:
+                    try: os.unlink(tmp_path)
+                    except: pass
+
+            # Update metadata (title + authors) if requested
+            meta_updated = 0
+            meta_errors  = []
+            if meta_cb.isChecked():
+                try:
+                    try:
+                        from calibre_plugins.furigana_ruby.chinese_engine import _get_converter
+                    except ImportError:
+                        from chinese_engine import _get_converter
+                    converter     = _get_converter(variant)
+                    seen_book_ids = set()
+                    for book_id, _, tmp_path, err in results:
+                        if err or book_id in seen_book_ids:
+                            continue
+                        seen_book_ids.add(book_id)
+                        try:
+                            title     = db.field_for('title', book_id) or ''
+                            new_title = converter.convert(title)
+                            if new_title != title:
+                                db.set_field('title', {book_id: new_title})
+
+                            authors     = list(db.field_for('authors', book_id) or [])
+                            new_authors = [converter.convert(a) for a in authors]
+                            if new_authors != authors:
+                                db.set_field('authors', {book_id: new_authors})
+
+                            meta_updated += 1
+                        except Exception as e:
+                            meta_errors.append(f'Book {book_id}: {e}')
+                except Exception as e:
+                    meta_errors.append(f'Converter unavailable: {e}')
+
+            self.gui.library_view.model().refresh_ids(
+                list({r[0] for r in results}))
+
+            # Summary
+            lines = [
+                f'✅ Converted {saved} format(s) across {len(tasks)} book(s)'
+                f'  [{direction} / {variant}]'
+            ]
+            if meta_updated:
+                lines.append(f'   Updated metadata for {meta_updated} book(s)')
+            if save_errors:
+                lines.append(f'⚠ {len(save_errors)} save error(s):')
+                lines += [f'  {e}' for e in save_errors[:5]]
+            if meta_errors:
+                lines.append(f'⚠ {len(meta_errors)} metadata error(s):')
+                lines += [f'  {e}' for e in meta_errors[:3]]
+            lines += ['', _selection_summary()]
+
+            result_te.setVisible(True)
+            result_te.setPlainText('\n'.join(lines))
+
+            # Update lang_info in memory for successfully converted books so
+            # _restore_cb_enabled (called by _unlock_controls) correctly
+            # disables them for the same direction on the next Apply.
+            converted_ids = {r[0] for r in results if not r[3]}
+            for row in book_rows:
+                if row['book_id'] in converted_ids:
+                    if going_s2t:
+                        row['lang_info']['is_simplified'] = False
+                        row['lang_info']['is_traditional'] = True
+                    else:
+                        row['lang_info']['is_traditional'] = False
+                        row['lang_info']['is_simplified'] = True
+
+            _unlock_controls()
+            _update_apply_state()
 
         dlg.exec() if PYQT6 else dlg.exec_()
 

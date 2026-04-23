@@ -188,6 +188,58 @@ def ensure_deps():
         return False
 
 
+def ensure_opencc():
+    """
+    Make opencc (opencc-python-reimplemented) importable from bundled deps.
+    Thread-safe.  Returns True on success.
+
+    opencc doesn't need the importlib.resources patch that pykakasi requires —
+    it locates its dict files relative to __file__ using plain os.path, so
+    extracting it to a temp dir is sufficient.
+    """
+    global _extracted_path
+
+    # Already importable?
+    try:
+        import opencc   # noqa
+        return True
+    except ImportError:
+        pass
+
+    with _lock:
+        # Reuse extraction already done by ensure_deps(), or do it now
+        if not _extracted_path:
+            zip_path = _find_plugin_zip()
+            if zip_path:
+                deps_path = _extract_bundled_deps(zip_path)
+                if deps_path:
+                    _extracted_path = deps_path
+
+        if _extracted_path:
+            if _extracted_path not in sys.path:
+                sys.path.insert(0, _extracted_path)
+            try:
+                import opencc   # noqa
+                return True
+            except ImportError:
+                pass
+
+        # Dev mode — bundled_deps next to this file
+        try:
+            plugin_dir = os.path.dirname(os.path.abspath(__file__))
+            bundled = os.path.join(plugin_dir, 'bundled_deps')
+            if os.path.isdir(bundled):
+                if bundled not in sys.path:
+                    sys.path.insert(0, bundled)
+                import opencc   # noqa
+                _ready = True
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
 def get_status():
     if _ready:
         try:

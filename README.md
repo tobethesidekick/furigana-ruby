@@ -109,6 +109,22 @@ The toggle works identically in any browser — open Calibre's content server at
 
 ## Changelog
 
+### v1.3.0
+**New: Simplified ↔ Traditional Chinese conversion**
+- New **繁 Convert Chinese S↔T…** toolbar menu command — converts EPUB, HTML, FB2, and TXT books between Simplified and Traditional Chinese in one click
+- Supports 8 OpenCC conversion variants: generic S↔T, Taiwan Traditional (正體 — `s2tw` / `s2twp` recommended), Hong Kong Traditional (港式繁體 — `s2hk`), and reverse T→S directions
+- Phrase-level variants (`s2twp`, `tw2sp`) for more accurate vocabulary conversion (e.g. 軟件→軟體); faster character-only variants also available
+- Auto-detects book script from EPUB metadata (`dc:language`) and content sampling — pre-selects applicable books and shows "Already Traditional / Already Simplified" for books that don't need conversion
+- Converts text nodes only — tags, attributes, CSS, and scripts are never modified
+- Optionally converts title and author metadata in the same pass
+- Tri-state select-all checkbox in the book list header; individual checkboxes hidden for non-applicable books
+- opencc-python-reimplemented bundled — no separate install needed
+
+**Build change**
+- `setup_plugin.py` now bundles `opencc` alongside `pykakasi` automatically
+
+---
+
 ### v1.2.1
 **New: CJK language detection**
 - Detects book language from EPUB metadata (`dc:language`) — Japanese, Chinese (Simplified/Traditional), or Korean
@@ -166,7 +182,7 @@ git clone https://github.com/tobethesidekick/furigana-ruby.git
 cd furigana-ruby
 
 # Install build dependencies into a local cache
-pip3 install pykakasi jaconv deprecated wrapt --target deps_cache/
+pip3 install pykakasi jaconv deprecated wrapt opencc-python-reimplemented --target deps_cache/
 
 # Build FuriganaRuby.zip
 python3 setup_plugin.py
