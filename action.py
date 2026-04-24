@@ -15,9 +15,9 @@ try:
                                   QToolButton, QDialog, QVBoxLayout,
                                   QHBoxLayout, QCheckBox, QLabel,
                                   QGroupBox, QDialogButtonBox, QPushButton,
-                                  QSizePolicy, QTextEdit, QComboBox,
-                                  QRadioButton, QButtonGroup, QScrollArea,
-                                  QWidget)
+                                  QSizePolicy, QTextEdit, QTextBrowser,
+                                  QComboBox, QRadioButton, QButtonGroup,
+                                  QScrollArea, QWidget, QFrame)
     from PyQt6.QtCore import Qt, QThread, pyqtSignal
     from PyQt6.QtGui import QIcon, QAction, QPainter
     PYQT6 = True
@@ -26,10 +26,10 @@ except ImportError:
                            QToolButton, QDialog, QVBoxLayout,
                            QHBoxLayout, QCheckBox, QLabel,
                            QGroupBox, QDialogButtonBox, QPushButton,
-                           QSizePolicy, QTextEdit, QComboBox,
-                           QRadioButton, QButtonGroup, QScrollArea,
-                           QWidget, Qt, QThread, pyqtSignal, QIcon, QAction,
-                           QPainter)
+                           QSizePolicy, QTextEdit, QTextBrowser,
+                           QComboBox, QRadioButton, QButtonGroup,
+                           QScrollArea, QWidget, QFrame, Qt, QThread,
+                           pyqtSignal, QIcon, QAction, QPainter)
     PYQT6 = False
 
 from calibre.gui2.actions import InterfaceAction
@@ -301,6 +301,55 @@ class OrientationWorker(QThread):
         except Exception:
             import traceback
             self.finished.emit(False, 0, 0, False, [], traceback.format_exc())
+
+
+class BulkOrientationWorker(QThread):
+    """
+    Converts layout orientation for multiple EPUBs sequentially.
+
+    Signals
+    -------
+    book_started(book_id)
+    book_finished(book_id, ok, msg)
+    finished(ok, results, traceback)
+        results = [(book_id, tmp_path_or_None, error_or_None)]
+    """
+    book_started  = pyqtSignal(int)
+    book_finished = pyqtSignal(int, bool, str)
+    finished      = pyqtSignal(bool, list, str)
+
+    def __init__(self, tasks, target):
+        super().__init__()
+        self.tasks  = tasks   # list of {'book_id': int, 'epub': str}
+        self.target = target  # 'vertical' | 'horizontal'
+
+    def run(self):
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.orientation_engine import (
+                    process_epub_orientation)
+            except ImportError:
+                from orientation_engine import process_epub_orientation
+
+            results = []
+            for task in self.tasks:
+                self.book_started.emit(task['book_id'])
+                tmp = tempfile.mktemp(suffix='.epub')
+                try:
+                    process_epub_orientation(task['epub'], tmp, self.target)
+                    results.append((task['book_id'], tmp, None))
+                    self.book_finished.emit(task['book_id'], True, '')
+                except Exception as e:
+                    try: os.unlink(tmp)
+                    except: pass
+                    results.append((task['book_id'], None, str(e)))
+                    self.book_finished.emit(task['book_id'], False, str(e))
+
+            self.finished.emit(True, results, '')
+
+        except Exception:
+            import traceback
+            self.finished.emit(False, [], traceback.format_exc())
 
 
 class FuriganaWorker(QThread):
@@ -785,9 +834,12 @@ class FuriganaAction(InterfaceAction):
         ids = self._selected_ids()
         if not ids:
             warning_dialog(self.gui, 'No Book Selected',
-                'Select a Japanese/Chinese/Korean EPUB book first.', show=True)
+                'Select one or more EPUB books first.', show=True)
             return
-        self._show_orientation_dialog(ids[0])
+        if len(ids) == 1:
+            self._show_orientation_dialog(ids[0])
+        else:
+            self._show_bulk_orientation_dialog(ids)
 
     def _show_orientation_dialog(self, book_id):
         path = self._epub_path(book_id)
@@ -976,6 +1028,467 @@ class FuriganaAction(InterfaceAction):
         btn_convert.clicked.connect(on_convert)
         btn_viewer.clicked.connect(on_viewer)
         btn_close.clicked.connect(dlg.reject)
+
+        dlg.exec() if PYQT6 else dlg.exec_()
+
+    # ── Bulk orientation conversion ───────────────────────────────
+
+    def _show_bulk_orientation_dialog(self, book_ids):
+        try:
+            from calibre_plugins.furigana_ruby.orientation_engine import detect_orientation
+        except ImportError:
+            from orientation_engine import detect_orientation
+
+        db = self.gui.current_db.new_api
+
+        # ── Scan books ────────────────────────────────────────────
+        book_rows      = []
+        excluded_count = 0   # books without EPUB
+
+        for book_id in book_ids:
+            title = db.field_for('title', book_id) or f'Book {book_id}'
+            epub_path = (db.format_abspath(book_id, 'EPUB')
+                         if db.has_format(book_id, 'EPUB') else None)
+            if not epub_path:
+                excluded_count += 1
+                continue
+            try:
+                orientation = detect_orientation(epub_path)
+            except Exception:
+                orientation = 'unknown'
+            book_rows.append({'book_id': book_id, 'title': title,
+                              'epub': epub_path, 'orientation': orientation})
+
+        def _orient_label(o):
+            return {'vertical': 'Vertical', 'horizontal': 'Horizontal'}.get(o, 'Unknown')
+
+        def _selection_summary():
+            parts = [f'{len(book_rows)} EPUB book(s)']
+            if excluded_count:
+                parts.append(f'{excluded_count} skipped (no EPUB)')
+            return f'Selection: {len(book_ids)} book(s) — {" · ".join(parts)}'
+
+        # ── Build dialog ──────────────────────────────────────────
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('Convert Layout — Bulk')
+        dlg.setMinimumWidth(680)
+        dlg.resize(700, 520)
+
+        vl = QVBoxLayout()
+        vl.setSpacing(8)
+        dlg.setLayout(vl)
+
+        # Direction
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel('<b>Direction:</b>'))
+        rb_h2v = QRadioButton('Horizontal → Vertical')
+        rb_v2h = QRadioButton('Vertical → Horizontal')
+        rb_h2v.setChecked(True)
+        dir_row.addWidget(rb_h2v)
+        dir_row.addWidget(rb_v2h)
+        dir_row.addStretch()
+        vl.addLayout(dir_row)
+
+        # ── Header row ────────────────────────────────────────────
+        hdr_widget = QWidget()
+        hdr_widget.setObjectName('orientHdr')
+        hdr_widget.setStyleSheet(
+            '#orientHdr { background-color: #d4d4d4; '
+            'border: 1px solid #b8b8b8; border-bottom: none; }')
+        hdr_layout = QHBoxLayout()
+        hdr_layout.setContentsMargins(4, 3, 4, 3)
+        hdr_layout.setSpacing(4)
+
+        header_cb = QCheckBox()
+        header_cb.setTristate(True)
+        header_cb.setToolTip('Select / deselect all applicable books')
+
+        hdr_cb_box = QWidget()
+        hdr_cb_box.setFixedWidth(20)
+        hdr_cb_inner = QHBoxLayout()
+        hdr_cb_inner.setContentsMargins(0, 0, 0, 0)
+        hdr_cb_inner.setSpacing(0)
+        hdr_cb_inner.addStretch()
+        hdr_cb_inner.addWidget(header_cb)
+        hdr_cb_inner.addStretch()
+        hdr_cb_box.setLayout(hdr_cb_inner)
+
+        hdr_books_lbl  = QLabel('<b>Books</b>')
+        hdr_status_lbl = QLabel('<b>Status</b>')
+        hdr_status_lbl.setMinimumWidth(170)
+        try:
+            hdr_status_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        except AttributeError:
+            hdr_status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        hdr_layout.addWidget(hdr_cb_box)
+        hdr_layout.addWidget(hdr_books_lbl, 3)
+        hdr_layout.addWidget(hdr_status_lbl, 1)
+        hdr_widget.setLayout(hdr_layout)
+
+        # ── Scrollable book list ──────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet('QScrollArea { border: 1px solid #b8b8b8; border-top: none; }')
+        sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        scroll.setSizePolicy(sp.Expanding, sp.Expanding)
+
+        table_container = QWidget()
+        table_vl = QVBoxLayout()
+        table_vl.setSpacing(0)
+        table_vl.setContentsMargins(0, 0, 0, 0)
+        table_vl.addWidget(hdr_widget)
+        table_vl.addWidget(scroll)
+        table_container.setLayout(table_vl)
+
+        list_widget  = QWidget()
+        list_layout  = QVBoxLayout()
+        list_layout.setSpacing(3)
+        list_layout.setContentsMargins(4, 4, 4, 4)
+        list_widget.setLayout(list_layout)
+
+        checkboxes    = []
+        status_labels = {}
+        title_labels  = {}
+        sub_labels    = {}
+        sub_base_text = {}
+        cb_map        = {}
+        applicable_ids = set()   # book_ids currently applicable; avoids isVisible quirks
+
+        _SUB_STYLE = 'color: #545454; font-size: 11px;'
+        sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
+
+        for row in book_rows:
+            cb = QCheckBox()
+            cb_box = QWidget()
+            cb_box.setFixedWidth(20)
+            cb_box_inner = QHBoxLayout()
+            cb_box_inner.setContentsMargins(0, 0, 0, 0)
+            cb_box_inner.setSpacing(0)
+            cb_box_inner.addStretch()
+            cb_box_inner.addWidget(cb)
+            cb_box_inner.addStretch()
+            cb_box.setLayout(cb_box_inner)
+
+            title_lbl = ElidedLabel(row['title'])
+            title_lbl.setToolTip(row['title'])
+            title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
+            title_lbl.clicked.connect(
+                lambda _=None, c=cb, bid=row['book_id']:
+                    c.toggle() if bid in applicable_ids and c.isEnabled() else None)
+
+            status_lbl = QLabel('')
+            try:
+                status_lbl.setAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            except AttributeError:
+                status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            status_lbl.setMinimumWidth(170)
+
+            _base = _orient_label(row['orientation'])
+            sub_lbl = QLabel(_base)
+            sub_lbl.setStyleSheet(_SUB_STYLE)
+
+            top_row = QHBoxLayout()
+            top_row.setSpacing(4)
+            top_row.setContentsMargins(0, 0, 0, 0)
+            top_row.addWidget(cb_box)
+            top_row.addWidget(title_lbl, 3)
+            top_row.addWidget(status_lbl, 1)
+
+            sub_row = QHBoxLayout()
+            sub_row.setContentsMargins(24, 0, 0, 2)
+            sub_row.addWidget(sub_lbl)
+            sub_row.addStretch()
+
+            container_layout = QVBoxLayout()
+            container_layout.setSpacing(1)
+            container_layout.setContentsMargins(4, 4, 4, 4)
+            container_layout.addLayout(top_row)
+            container_layout.addLayout(sub_row)
+
+            container = QWidget()
+            container.setLayout(container_layout)
+            list_layout.addWidget(container)
+
+            checkboxes.append(cb)
+            cb_map[row['book_id']]        = cb
+            status_labels[row['book_id']] = status_lbl
+            title_labels[row['book_id']]  = title_lbl
+            sub_labels[row['book_id']]    = sub_lbl
+            sub_base_text[row['book_id']] = _base
+
+        list_layout.addStretch()
+        scroll.setWidget(list_widget)
+        vl.addWidget(table_container)
+
+        # Summary panel
+        sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        result_te = QTextEdit()
+        result_te.setReadOnly(True)
+        result_te.setFixedHeight(80)
+        result_te.setSizePolicy(sp2.Expanding, sp2.Fixed)
+        result_te.setPlainText(_selection_summary())
+        vl.addWidget(result_te)
+
+        # Buttons
+        try:
+            std   = QDialogButtonBox.StandardButton
+            bb    = QDialogButtonBox(std.Ok | std.Close)
+        except AttributeError:
+            bb    = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Close)
+        ok_btn = bb.button(
+            QDialogButtonBox.StandardButton.Ok if PYQT6 else QDialogButtonBox.Ok)
+        if ok_btn:
+            ok_btn.setText('Apply')
+        bb.accepted.connect(lambda: _on_apply())
+        bb.rejected.connect(dlg.reject)
+        vl.addWidget(bb)
+
+        # ── Logic helpers ─────────────────────────────────────────
+
+        def _is_applicable(orientation, going_h2v):
+            if orientation == 'unknown':
+                return True
+            return orientation != ('vertical' if going_h2v else 'horizontal')
+
+        def _already_status(orientation, going_h2v):
+            if going_h2v and orientation == 'vertical':
+                return 'Already Vertical'
+            if not going_h2v and orientation == 'horizontal':
+                return 'Already Horizontal'
+            return ''
+
+        def _update_apply_state():
+            any_checked = any(
+                cb.isChecked()
+                for cb, row in zip(checkboxes, book_rows)
+                if row['book_id'] in applicable_ids)
+            if ok_btn:
+                ok_btn.setEnabled(any_checked)
+                ok_btn.setToolTip(
+                    '' if any_checked else
+                    'No books selected. Books already in the target layout are disabled.')
+            _update_header_cb()
+
+        def _update_header_cb():
+            applicable_cbs = [cb for cb, row in zip(checkboxes, book_rows)
+                               if row['book_id'] in applicable_ids]
+            header_cb.blockSignals(True)
+            try:
+                if not applicable_cbs:
+                    state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                else:
+                    n = sum(1 for cb in applicable_cbs if cb.isChecked())
+                    if n == 0:
+                        state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                    elif n == len(applicable_cbs):
+                        state = (Qt.CheckState.Checked if PYQT6 else Qt.Checked)
+                    else:
+                        state = (Qt.CheckState.PartiallyChecked
+                                 if PYQT6 else Qt.PartiallyChecked)
+                header_cb.setCheckState(state)
+            except AttributeError:
+                pass
+            finally:
+                header_cb.blockSignals(False)
+
+        def _on_header_clicked():
+            applicable_cbs = [cb for cb, row in zip(checkboxes, book_rows)
+                               if row['book_id'] in applicable_ids]
+            all_checked = (bool(applicable_cbs) and
+                           all(cb.isChecked() for cb in applicable_cbs))
+            for cb in applicable_cbs:
+                cb.setChecked(not all_checked)
+            _update_apply_state()
+
+        def _apply_row_style(row, applicable, going_h2v, preserve_status=False):
+            bid    = row['book_id']
+            cb     = cb_map[bid]
+            sl     = sub_labels[bid]
+            lbl    = status_labels[bid]
+            base   = sub_base_text[bid]
+            reason = _already_status(row['orientation'], going_h2v)
+
+            cb.setVisible(applicable)
+            sl.setText(base)
+            sl.setStyleSheet(_SUB_STYLE)
+
+            if applicable:
+                if not preserve_status:
+                    lbl.setText('')
+                    lbl.setStyleSheet('')
+            else:
+                if not preserve_status or not (
+                        lbl.text().startswith('✅') or lbl.text().startswith('⚠')):
+                    lbl.setText(reason)
+                    lbl.setStyleSheet('color: #595959;')
+
+        def _refresh_checks():
+            going_h2v = rb_h2v.isChecked()
+            applicable_ids.clear()
+            for cb, row in zip(checkboxes, book_rows):
+                applicable = _is_applicable(row['orientation'], going_h2v)
+                if applicable:
+                    applicable_ids.add(row['book_id'])
+                cb.setVisible(applicable)
+                cb.setEnabled(applicable)
+                cb.setChecked(applicable)
+                _apply_row_style(row, applicable, going_h2v, preserve_status=False)
+            _update_apply_state()
+
+        def _restore_cb_enabled():
+            going_h2v = rb_h2v.isChecked()
+            applicable_ids.clear()
+            for cb, row in zip(checkboxes, book_rows):
+                applicable = _is_applicable(row['orientation'], going_h2v)
+                if applicable:
+                    applicable_ids.add(row['book_id'])
+                cb.setVisible(applicable)
+                cb.setEnabled(applicable)
+                _apply_row_style(row, applicable, going_h2v, preserve_status=True)
+            _update_apply_state()
+
+        def _lock_controls():
+            rb_h2v.setEnabled(False)
+            rb_v2h.setEnabled(False)
+            header_cb.setEnabled(False)
+            for cb in checkboxes:
+                cb.setEnabled(False)
+
+        def _unlock_controls():
+            rb_h2v.setEnabled(True)
+            rb_v2h.setEnabled(True)
+            header_cb.setEnabled(True)
+            _restore_cb_enabled()
+
+        # ── Apply handler ─────────────────────────────────────────
+
+        def _on_apply():
+            tasks = [row for cb, row in zip(checkboxes, book_rows)
+                     if cb.isChecked()]
+            if not tasks:
+                return
+
+            going_h2v = rb_h2v.isChecked()
+            target    = 'vertical' if going_h2v else 'horizontal'
+            direction = 'H→V' if going_h2v else 'V→H'
+
+            _lock_controls()
+            if ok_btn:
+                ok_btn.setEnabled(False)
+            QApplication.processEvents()
+
+            for row in tasks:
+                lbl = status_labels[row['book_id']]
+                lbl.setText('⏳ Converting…')
+                lbl.setStyleSheet('color: #545454;')
+
+            done    = [False]
+            outcome = [None]
+
+            worker = BulkOrientationWorker(tasks, target)
+
+            def on_book_started(book_id):
+                lbl = status_labels.get(book_id)
+                if lbl:
+                    lbl.setText('⏳ Converting…')
+                    lbl.setStyleSheet('color: #545454;')
+
+            def on_book_finished(book_id, ok, msg):
+                lbl = status_labels.get(book_id)
+                if lbl:
+                    if ok:
+                        lbl.setText('✅ Done')
+                        lbl.setStyleSheet('color: green;')
+                    else:
+                        lbl.setText('⚠ Error')
+                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip(msg)
+
+            def on_done(ok, results, tb):
+                done[0]    = True
+                outcome[0] = (ok, results, tb)
+
+            worker.book_started.connect(on_book_started)
+            worker.book_finished.connect(on_book_finished)
+            worker.finished.connect(on_done)
+            worker.start()
+
+            while not done[0]:
+                QApplication.processEvents()
+            worker.wait()
+
+            ok2, results, tb = outcome[0]
+
+            if not ok2:
+                result_te.setPlainText(f'⚠ Unexpected error:\n{tb}')
+                result_te.setVisible(True)
+                _unlock_controls()
+                return
+
+            # Save back to Calibre
+            saved       = 0
+            save_errors = []
+            for book_id, tmp_path, err in results:
+                lbl = status_labels.get(book_id)
+                if err or not tmp_path:
+                    save_errors.append(f'Book {book_id}: {err}')
+                    if lbl and lbl.text() != '⚠ Error':
+                        lbl.setText('⚠ Conv. error')
+                        lbl.setStyleSheet('color: red;')
+                    continue
+                try:
+                    db.add_format(book_id, 'EPUB', tmp_path, replace=True)
+                    saved += 1
+                except Exception as e:
+                    save_errors.append(f'Book {book_id}: save failed: {e}')
+                    if lbl:
+                        lbl.setText('⚠ Save error')
+                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip(str(e))
+                finally:
+                    try: os.unlink(tmp_path)
+                    except: pass
+
+            self.gui.library_view.model().refresh_ids(
+                list({r[0] for r in results}))
+
+            # Update orientation in memory → prevent redundant re-conversion
+            converted_ids = {r[0] for r in results if not r[2]}
+            for row in book_rows:
+                if row['book_id'] in converted_ids:
+                    row['orientation'] = target
+                    new_label = _orient_label(target)
+                    sub_base_text[row['book_id']] = new_label
+                    sub_labels[row['book_id']].setText(new_label)
+
+            lines = [
+                f'✅ Converted {saved} book(s)  [{direction}]'
+            ]
+            if save_errors:
+                lines.append(f'⚠ {len(save_errors)} error(s):')
+                lines += [f'  {e}' for e in save_errors[:5]]
+            lines += ['', _selection_summary()]
+
+            result_te.setVisible(True)
+            result_te.setPlainText('\n'.join(lines))
+            _unlock_controls()
+
+        # Wire signals
+        rb_h2v.toggled.connect(lambda _: _refresh_checks())
+        for cb in checkboxes:
+            cb.stateChanged.connect(lambda _: _update_apply_state())
+        header_cb.clicked.connect(_on_header_clicked)
+
+        if not book_rows:
+            _lock_controls()
+            if ok_btn:
+                ok_btn.setEnabled(False)
+                ok_btn.setToolTip('No EPUB books in selection.')
+
+        _refresh_checks()
 
         dlg.exec() if PYQT6 else dlg.exec_()
 
@@ -1219,6 +1732,7 @@ class FuriganaAction(InterfaceAction):
         sub_labels    = {}   # book_id → QLabel  (language · formats [· reason])
         sub_base_text = {}   # book_id → plain "lang  ·  fmts" (no reason suffix)
         cb_map        = {}   # book_id → QCheckBox (for _apply_row_style)
+        applicable_ids = set()   # book_ids currently applicable; avoids isVisible quirks
 
         _SUB_STYLE = 'color: #545454; font-size: 11px;'
 
@@ -1259,7 +1773,8 @@ class FuriganaAction(InterfaceAction):
             title_lbl.setToolTip(row['title'])
             title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
             title_lbl.clicked.connect(
-                lambda _=None, c=cb: c.toggle() if c.isVisible() and c.isEnabled() else None)
+                lambda _=None, c=cb, bid=row['book_id']:
+                    c.toggle() if bid in applicable_ids and c.isEnabled() else None)
 
             # ── Status (right column, left-aligned to match header)
             status_lbl = QLabel('')
@@ -1358,7 +1873,9 @@ class FuriganaAction(InterfaceAction):
         def _update_apply_state():
             """Enable Apply iff at least one applicable book is checked."""
             any_checked = any(
-                cb.isChecked() and cb.isVisible() for cb in checkboxes)
+                cb.isChecked()
+                for cb, row in zip(checkboxes, book_rows)
+                if row['book_id'] in applicable_ids)
             if ok_btn:
                 ok_btn.setEnabled(any_checked)
                 if not any_checked:
@@ -1380,7 +1897,8 @@ class FuriganaAction(InterfaceAction):
 
         def _update_header_cb():
             """Sync header tri-state checkbox to current row selection state."""
-            applicable_cbs = [cb for cb in checkboxes if cb.isVisible()]
+            applicable_cbs = [cb for cb, row in zip(checkboxes, book_rows)
+                               if row['book_id'] in applicable_ids]
             header_cb.blockSignals(True)
             try:
                 if not applicable_cbs:
@@ -1402,7 +1920,8 @@ class FuriganaAction(InterfaceAction):
 
         def _on_header_clicked():
             """All checked → uncheck all; otherwise → check all applicable."""
-            applicable_cbs = [cb for cb in checkboxes if cb.isVisible()]
+            applicable_cbs = [cb for cb, row in zip(checkboxes, book_rows)
+                               if row['book_id'] in applicable_ids]
             all_checked = (bool(applicable_cbs) and
                            all(cb.isChecked() for cb in applicable_cbs))
             for cb in applicable_cbs:
@@ -1442,8 +1961,11 @@ class FuriganaAction(InterfaceAction):
         def _refresh_checks():
             """Re-evaluate enabled/checked/visible state for all rows. Resets status labels."""
             going_s2t = rb_s2t.isChecked()
+            applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
                 applicable = _is_applicable(row['lang_info'], going_s2t)
+                if applicable:
+                    applicable_ids.add(row['book_id'])
                 cb.setVisible(applicable)
                 cb.setEnabled(applicable)
                 cb.setChecked(applicable)
@@ -1454,8 +1976,11 @@ class FuriganaAction(InterfaceAction):
             """Re-enable applicable checkboxes after processing; preserve result
             status labels (✅ / ⚠) but update 'already' labels on newly disabled rows."""
             going_s2t = rb_s2t.isChecked()
+            applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
                 applicable = _is_applicable(row['lang_info'], going_s2t)
+                if applicable:
+                    applicable_ids.add(row['book_id'])
                 cb.setVisible(applicable)
                 cb.setEnabled(applicable)
                 _apply_row_style(row, applicable, going_s2t, preserve_status=True)
@@ -1680,6 +2205,14 @@ class FuriganaAction(InterfaceAction):
                     else:
                         row['lang_info']['is_traditional'] = False
                         row['lang_info']['is_simplified'] = True
+                    # Rebuild sub_base_text and update widget directly
+                    new_lang = _script_label(row['lang_info'])
+                    fmts = '  '.join(f for f, p in [
+                        ('EPUB', row['epub']), ('HTML', row['html']),
+                        ('FB2',  row['fb2']),  ('TXT',  row['txt'])] if p)
+                    new_base = f'{new_lang}  ·  {fmts}'
+                    sub_base_text[row['book_id']] = new_base
+                    sub_labels[row['book_id']].setText(new_base)
 
             _unlock_controls()
             _update_apply_state()
@@ -1691,23 +2224,65 @@ class FuriganaAction(InterfaceAction):
     def show_about(self):
         from calibre_plugins.furigana_ruby import FuriganaPluginBase
         ver = '.'.join(str(x) for x in FuriganaPluginBase.version)
-        info_dialog(self.gui, '振り仮名 Ruby Plugin',
+
+        html = (
             f'<h3>振り仮名 Ruby Plugin <span style="font-size:small;color:grey;">v{ver}</span></h3>'
-            '<b>Workflow:</b><ol>'
-            '<li>Select a Japanese EPUB in the library</li>'
-            '<li>Click the <b>振り仮名 Ruby</b> toolbar button</li>'
-            '<li>Review status, then click <b>Edit Ruby…</b></li>'
-            '<li>Check the levels you want annotated — pre-checked levels are '
-            'already in the book</li>'
-            '<li>Click <b>Apply</b> — checked levels are added, unchecked are removed</li>'
-            '<li>Click <b>Open in Viewer</b> to read</li>'
-            '<li>Press <b>Cmd+Shift+R</b> in viewer to toggle display</li>'
-            '</ol>'
-            '<b>Toggle modes:</b> 🈳 All → 📖 Publisher only → 🈚 Off<br><br>'
-            '<b>Publisher ruby</b> is never modified.<br>'
-            '<b>Auto ruby</b> appears in '
-            '<span style="color:#4a72c4">blue</span>.',
-            show=True)
+            '<p>A Calibre plugin for East Asian ebooks. Select one or more books, '
+            'click the <b>振り仮名</b> toolbar button, and choose a command.</p>'
+            '<hr/>'
+
+            '<p><b>振り仮名 &mdash; Edit Ruby&hellip;</b>'
+            '&nbsp;&nbsp;<span style="color:#545454;font-size:small;">Japanese EPUBs</span></p>'
+            '<p style="margin:0 0 0 12px;color:#333;">'
+            'Adds or removes furigana (reading aids) above kanji, filtered by JLPT level '
+            '(N5 &rarr; N1). Publisher-supplied ruby is never overwritten. '
+            'Auto-generated ruby appears in <span style="color:#4a72c4">blue</span>; '
+            'use the in-viewer toggle (&#x1F233; / &#x1F4D6; / &#x1F21A;) to switch between '
+            'all, publisher-only, or hidden.</p>'
+            '<hr/>'
+
+            '<p><b>繁 &mdash; Convert Chinese S&harr;T&hellip;</b>'
+            '&nbsp;&nbsp;<span style="color:#545454;font-size:small;">Chinese &middot; EPUB &middot; HTML &middot; FB2 &middot; TXT</span></p>'
+            '<p style="margin:0 0 0 12px;color:#333;">'
+            'Converts between Simplified and Traditional Chinese. '
+            'Supports 8 OpenCC variants including Taiwan (正體), Hong Kong (港式繁體), '
+            'and phrase-level vocabulary conversion. '
+            'Text nodes only &mdash; tags, CSS, and scripts are never modified.</p>'
+            '<hr/>'
+
+            '<p><b>&harr; &mdash; Convert Layout&hellip;</b>'
+            '&nbsp;&nbsp;<span style="color:#545454;font-size:small;">Japanese &middot; Chinese &middot; Korean EPUBs</span></p>'
+            '<p style="margin:0 0 0 12px;color:#333;">'
+            'Switches the text direction between horizontal (左&rarr;右) and vertical (縦書き). '
+            'Updates CSS writing-mode, OPF page-progression-direction, '
+            'and repositions the ruby toggle button to match.</p>'
+        )
+
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('振り仮名 Ruby Plugin')
+        dlg.setMinimumWidth(420)
+        dlg.resize(460, 340)
+
+        vl = QVBoxLayout()
+        vl.setContentsMargins(12, 12, 12, 8)
+        vl.setSpacing(8)
+        dlg.setLayout(vl)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(html)
+        browser.setFrameShape(QFrame.Shape.NoFrame if PYQT6 else QFrame.NoFrame)
+        vl.addWidget(browser)
+
+        try:
+            std = QDialogButtonBox.StandardButton
+            bb  = QDialogButtonBox(std.Ok)
+        except AttributeError:
+            bb  = QDialogButtonBox(QDialogButtonBox.Ok)
+        bb.accepted.connect(dlg.accept)
+        vl.addWidget(bb)
+
+        dlg.exec() if PYQT6 else dlg.exec_()
 
     # ── Update check ──────────────────────────────────────────────
 

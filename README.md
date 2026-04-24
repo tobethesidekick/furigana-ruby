@@ -109,6 +109,18 @@ The toggle works identically in any browser — open Calibre's content server at
 
 ## Changelog
 
+### v1.3.1
+**Bug fixes**
+- Header checkbox now correctly reflects checked state when a bulk dialog first opens
+- Sub-label (Vertical/Horizontal, Simplified/Traditional) now updates immediately after conversion when switching direction — previously required closing and reopening the dialog
+- Fixed deploy workflow: `setup_plugin.py` now auto-quits Calibre, copies the built zip, and relaunches — no manual reinstall needed
+
+**About dialog**
+- Redesigned as a scrollable dialog covering all three features: Edit Ruby, Convert Chinese S↔T, and Convert Layout
+- Convert Layout now correctly lists Japanese, Chinese, and Korean as supported languages
+
+---
+
 ### v1.3.0
 **New: Simplified ↔ Traditional Chinese conversion**
 - New **繁 Convert Chinese S↔T…** toolbar menu command — converts EPUB, HTML, FB2, and TXT books between Simplified and Traditional Chinese in one click

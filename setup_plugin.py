@@ -181,9 +181,49 @@ with zipfile.ZipFile(out_zip, 'r') as zf:
     print(f"  Total entries: {len(all_names)} ({len(dep_files)} in bundled_deps/)")
 
 print()
-print("Next steps:")
-print("  1. Open Calibre")
-print("  2. Preferences → Plugins → Load plugin from file")
-print(f"  3. Select: {out_zip}")
-print("  4. Restart Calibre")
-print("  5. Select a Japanese EPUB → click '振り仮名' in toolbar → Add Furigana")
+print("─" * 50)
+
+# ── Auto-deploy (macOS) ───────────────────────────────────────────────────────
+
+import platform, subprocess, time
+
+CALIBRE_PLUGIN_DIR = os.path.expanduser(
+    '~/Library/Preferences/calibre/plugins')
+dest = os.path.join(CALIBRE_PLUGIN_DIR, 'FuriganaRuby.zip')
+
+if platform.system() == 'Darwin' and os.path.isdir(CALIBRE_PLUGIN_DIR):
+    # Calibre is already installed — quit it, deploy, relaunch.
+
+    # 1. Check if Calibre is running
+    running = subprocess.run(
+        ['pgrep', '-x', 'calibre'], capture_output=True).returncode == 0
+
+    if running:
+        print("Quitting Calibre…")
+        subprocess.run(
+            ['osascript', '-e', 'tell application "calibre" to quit'],
+            capture_output=True)
+        # Wait up to 10 s for it to exit
+        for _ in range(20):
+            time.sleep(0.5)
+            if subprocess.run(
+                    ['pgrep', '-x', 'calibre'],
+                    capture_output=True).returncode != 0:
+                break
+
+    # 2. Copy the zip
+    shutil.copy2(out_zip, dest)
+    print(f"✓ Deployed to {dest}")
+
+    # 3. Relaunch Calibre
+    subprocess.Popen(['open', '-a', 'calibre'])
+    print("✓ Calibre restarting…")
+
+else:
+    # Not macOS or first install — print manual instructions
+    print("First install on a new machine (once only):")
+    print("  Calibre → Preferences → Plugins → Load plugin from file")
+    print(f"  → select {out_zip}")
+    print("  Then restart Calibre.")
+
+print("─" * 50)
