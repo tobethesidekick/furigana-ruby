@@ -1,6 +1,6 @@
-# 振り仮名 Ruby — Calibre Plugin
+# 振り仮名 Ruby & More — Calibre Plugin
 
-Automatically adds furigana (ruby annotations) to Japanese EPUB books in [Calibre](https://calibre-ebook.com). Powered by [pykakasi](https://github.com/miurahr/pykakasi) (bundled — no separate install needed).
+A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one or more books, click the **振り仮名** toolbar button, and choose a command. All dependencies are bundled — no separate installs needed.
 
 [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tobethesidekick)
 
@@ -8,12 +8,29 @@ Automatically adds furigana (ruby annotations) to Japanese EPUB books in [Calibr
 
 ## Features
 
-- **Auto-generates furigana** for kanji in Japanese EPUBs
-- **Preserves publisher ruby** — never overwrites hand-verified readings
-- **JLPT-level filtering** — annotate only the kanji difficulty levels you want (N1–N5)
+### 振り仮名 — Edit Ruby (Japanese EPUBs)
+- **Auto-generates furigana** above kanji using [pykakasi](https://github.com/miurahr/pykakasi)
+- **Preserves publisher ruby** — hand-verified readings are never overwritten
+- **JLPT-level filtering** — annotate only the difficulty levels you want (N5–N1)
 - **Selective add/remove** — update individual levels without reprocessing the whole book
 - **Viewer toggle** — switch between *all ruby*, *publisher only*, and *hidden* while reading
 - Works in the **Calibre desktop viewer** and **Calibre browser content server** (Chrome, Firefox, Safari, mobile)
+
+### 繁 — Convert Chinese S↔T (Chinese · EPUB · HTML · FB2 · TXT)
+- **Simplified ↔ Traditional Chinese** conversion powered by [opencc-python-reimplemented](https://github.com/yichen0831/opencc-python-reimplemented) (bundled)
+- **8 conversion variants** — Generic S↔T, Taiwan Traditional 正體 (`s2tw` / `s2twp` recommended), Hong Kong Traditional 港式繁體 (`s2hk`), and reverse T→S directions
+- **Phrase-level variants** (`s2twp`, `tw2sp`) for accurate vocabulary conversion (e.g. 軟件→軟體)
+- **Auto-detects script** from EPUB metadata and content sampling — pre-selects applicable books and flags books that don't need conversion
+- **Metadata conversion** — optionally converts title and author fields in the same pass
+- **Text nodes only** — tags, attributes, CSS, and scripts are never modified
+
+### ↔ — Convert Layout (Japanese · Chinese · Korean EPUBs)
+- **Horizontal ↔ Vertical** text direction conversion in one click
+- Updates CSS `writing-mode` across all stylesheets, OPF `page-progression-direction`, and inline styles
+- **Tate-chu-yoko** — numbers and short Latin runs are wrapped in `text-combine-upright` so they render upright in vertical columns
+- **Punctuation normalisation** — converts Western quotes to CJK corner brackets, ASCII periods to ideographic full stops, and tab characters to ideographic spaces
+- **Toggle button repositioning** — the ruby viewer toggle moves to bottom-left for vertical text and bottom-right for horizontal text automatically
+- Supports bulk conversion of multiple books at once
 
 ---
 
