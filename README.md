@@ -1,6 +1,6 @@
 # 振り仮名 Ruby & More — Calibre Plugin
 
-A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one or more books, click the **振り仮名** toolbar button, and choose a command. All dependencies are bundled — no separate installs needed.
+A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one or more books, click the **振り仮名** toolbar button to add furigana. Or use the dropdown menu for additional commands. All dependencies are bundled — no separate installs needed.
 
 [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tobethesidekick)
 
