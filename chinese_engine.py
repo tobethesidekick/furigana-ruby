@@ -276,14 +276,29 @@ def convert_txt_s2t(txt_path, output_path, variant='s2tw'):
     converter = _get_converter(variant)
     errors = []
     try:
-        with open(txt_path, 'r', encoding='utf-8', errors='replace') as f:
-            text = f.read()
+        # Try common Chinese encodings — many mainland TXT files are GBK/GB18030
+        text = None
+        for enc in ('utf-8', 'gb18030', 'big5'):
+            try:
+                with open(txt_path, 'r', encoding=enc, errors='strict') as f:
+                    text = f.read()
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text is None:
+            with open(txt_path, 'r', encoding='utf-8', errors='replace') as f:
+                text = f.read()
         converted = converter.convert(text)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(converted)
         return len(text), errors
     except Exception as e:
         return 0, [str(e)]
+
+
+def convert_string_s2t(text, variant='s2tw'):
+    """Convert a plain string from Simplified to Traditional Chinese."""
+    return _get_converter(variant).convert(text)
 
 
 # ── HTML processor ────────────────────────────────────────────────────────────
