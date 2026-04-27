@@ -1544,12 +1544,11 @@ class FuriganaAction(InterfaceAction):
             from calibre_plugins.furigana_ruby.lang_detect import (
                 detect_book_language, lang_display,
                 detect_script_from_epub, detect_script_from_text)
-            from calibre_plugins.furigana_ruby.chinese_engine import (
-                VARIANTS_S2T, VARIANTS_T2S)
+            from calibre_plugins.furigana_ruby.chinese_engine import VARIANTS_S2T
         except ImportError:
             from lang_detect import (detect_book_language, lang_display,
                                      detect_script_from_epub, detect_script_from_text)
-            from chinese_engine import VARIANTS_S2T, VARIANTS_T2S
+            from chinese_engine import VARIANTS_S2T
 
         db = self.gui.current_db.new_api
 
@@ -1677,12 +1676,16 @@ class FuriganaAction(InterfaceAction):
         dir_row.addStretch()
         vl.addLayout(dir_row)
 
-        # Variant
+        # Variant (S→T only — T→S always uses standard Mainland Simplified)
         var_row = QHBoxLayout()
-        var_row.addWidget(QLabel('Variant:'))
+        var_lbl = QLabel('Variant:')
+        var_row.addWidget(var_lbl)
         var_combo = QComboBox()
         var_combo.setMinimumWidth(300)
+        t2s_static_lbl = QLabel('Mainland China Simplified (standard)')
+        t2s_static_lbl.setStyleSheet('color: #545454;')
         var_row.addWidget(var_combo)
+        var_row.addWidget(t2s_static_lbl)
         var_row.addStretch()
         vl.addLayout(var_row)
 
@@ -2019,26 +2022,30 @@ class FuriganaAction(InterfaceAction):
             _update_apply_state()
 
         def _update_var_desc():
-            variants = VARIANTS_S2T if rb_s2t.isChecked() else VARIANTS_T2S
             idx = var_combo.currentIndex()
-            if 0 <= idx < len(variants):
-                var_desc_lbl.setText(variants[idx][3])
+            if 0 <= idx < len(VARIANTS_S2T):
+                var_desc_lbl.setText(VARIANTS_S2T[idx][3])
             else:
                 var_desc_lbl.setText('')
 
         def _refresh_variants():
-            var_combo.blockSignals(True)
-            var_combo.clear()
-            variants = VARIANTS_S2T if rb_s2t.isChecked() else VARIANTS_T2S
-            saved    = prefs['s2t_variant'] if rb_s2t.isChecked() else prefs['t2s_variant']
-            for v, label, _dir, _desc in variants:
-                var_combo.addItem(label, v)
-            for i, (v, *_) in enumerate(variants):
-                if v == saved:
-                    var_combo.setCurrentIndex(i)
-                    break
-            var_combo.blockSignals(False)
-            _update_var_desc()
+            going_s2t = rb_s2t.isChecked()
+            var_lbl.setVisible(going_s2t)
+            var_combo.setVisible(going_s2t)
+            t2s_static_lbl.setVisible(not going_s2t)
+            var_desc_lbl.setVisible(going_s2t)
+            if going_s2t:
+                var_combo.blockSignals(True)
+                var_combo.clear()
+                saved = prefs['s2t_variant']
+                for v, label, _dir, _desc in VARIANTS_S2T:
+                    var_combo.addItem(label, v)
+                for i, (v, *_) in enumerate(VARIANTS_S2T):
+                    if v == saved:
+                        var_combo.setCurrentIndex(i)
+                        break
+                var_combo.blockSignals(False)
+                _update_var_desc()
             _refresh_checks()
 
         def _lock_controls():
@@ -2086,7 +2093,7 @@ class FuriganaAction(InterfaceAction):
                 return
 
             going_s2t = rb_s2t.isChecked()
-            variant   = var_combo.currentData()
+            variant   = var_combo.currentData() if going_s2t else 't2s'
             direction = 'S→T' if going_s2t else 'T→S'
             if not variant:
                 return

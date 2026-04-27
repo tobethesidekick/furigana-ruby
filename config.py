@@ -258,22 +258,25 @@ class ConfigWidget(QWidget):
         chinese_sub.addLayout(dir_row)
 
         var_row = QHBoxLayout()
-        var_row.addWidget(QLabel('Variant:'))
+        self._var_lbl = QLabel('Variant:')
+        var_row.addWidget(self._var_lbl)
         self._variant_combo = QComboBox()
+        self._t2s_static_lbl = QLabel('Mainland China Simplified (standard)')
+        self._t2s_static_lbl.setStyleSheet('color: #545454;')
         self._s2t_variant_saved = pj.get('s2t_variant',
                                   pj.get('auto_s2t_variant',
                                   mc.get('s2t_variant', 's2twp')))
-        self._t2s_variant_saved = pj.get('t2s_variant',
-                                  mc.get('t2s_variant', 't2s'))
         self._rb_s2t.toggled.connect(self._refresh_variants)
         self._refresh_variants()
         var_row.addWidget(self._variant_combo)
+        var_row.addWidget(self._t2s_static_lbl)
         var_row.addStretch()
         chinese_sub.addLayout(var_row)
 
         imp_layout.addLayout(chinese_sub)
 
-        self._chinese_sub_widgets = [chinese_fmt_lbl, self._rb_s2t, self._rb_t2s, self._variant_combo]
+        self._chinese_sub_widgets = [chinese_fmt_lbl, self._rb_s2t, self._rb_t2s,
+                                     self._variant_combo, self._t2s_static_lbl, self._var_lbl]
         self._chinese_cb.toggled.connect(self._toggle_chinese_sub)
         self._toggle_chinese_sub(chinese_enabled)
 
@@ -331,25 +334,22 @@ class ConfigWidget(QWidget):
             w.setEnabled(on)
 
     def _refresh_variants(self):
-        try:
-            from calibre_plugins.furigana_ruby.chinese_engine import VARIANTS_S2T, VARIANTS_T2S
-        except ImportError:
-            from chinese_engine import VARIANTS_S2T, VARIANTS_T2S
+        going_s2t = self._rb_s2t.isChecked()
+        self._variant_combo.setVisible(going_s2t)
+        self._t2s_static_lbl.setVisible(not going_s2t)
 
-        if self._rb_s2t.isChecked():
-            variants = VARIANTS_S2T
-            saved    = self._s2t_variant_saved
-        else:
-            variants = VARIANTS_T2S
-            saved    = self._t2s_variant_saved
-
-        self._variant_combo.clear()
-        sel = 0
-        for i, (v, label, *_) in enumerate(variants):
-            self._variant_combo.addItem(label, v)
-            if v == saved:
-                sel = i
-        self._variant_combo.setCurrentIndex(sel)
+        if going_s2t:
+            try:
+                from calibre_plugins.furigana_ruby.chinese_engine import VARIANTS_S2T
+            except ImportError:
+                from chinese_engine import VARIANTS_S2T
+            self._variant_combo.clear()
+            sel = 0
+            for i, (v, label, *_) in enumerate(VARIANTS_S2T):
+                self._variant_combo.addItem(label, v)
+                if v == self._s2t_variant_saved:
+                    sel = i
+            self._variant_combo.setCurrentIndex(sel)
 
     def _add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, 'Select Watch Folder')
@@ -413,14 +413,12 @@ full Launch Agent plist template.</p>
         ruby_levels   = [l for l, cb in self._ruby_level_cbs.items() if cb.isChecked()]
 
         s2t_var = variant_val if chinese_dir == 's2t' else prefs.get('s2t_variant', 's2twp')
-        t2s_var = variant_val if chinese_dir == 't2s' else prefs.get('t2s_variant', 't2s')
 
         # Save to JSONConfig (plugin reads this for manual operations)
         prefs['keep_original']          = keep_orig
         prefs['auto_chinese_enabled']   = chinese_on
         prefs['auto_chinese_direction'] = chinese_dir
         prefs['s2t_variant']            = s2t_var
-        prefs['t2s_variant']            = t2s_var
         prefs['auto_ruby_enabled']      = ruby_on
         prefs['auto_ruby_levels']       = ruby_levels
 
@@ -436,7 +434,6 @@ full Launch Agent plist template.</p>
             mc['auto_chinese_enabled']   = chinese_on
             mc['auto_chinese_direction'] = chinese_dir
             mc['s2t_variant']            = s2t_var
-            mc['t2s_variant']            = t2s_var
             mc['auto_ruby_enabled']      = ruby_on
             mc['auto_ruby_levels']       = ruby_levels
             _save_monitor_config(self._monitor_path, mc)
