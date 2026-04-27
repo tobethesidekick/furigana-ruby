@@ -460,6 +460,12 @@ class FuriganaAction(InterfaceAction):
 
         self.menu.addSeparator()
 
+        a_settings = QAction('⚙ Settings…', self.gui)
+        a_settings.triggered.connect(self.open_settings)
+        self.menu.addAction(a_settings)
+
+        self.menu.addSeparator()
+
         a3 = QAction('ℹ About / Help', self.gui)
         a3.triggered.connect(self.show_about)
         self.menu.addAction(a3)
@@ -2257,6 +2263,30 @@ class FuriganaAction(InterfaceAction):
             _update_apply_state()
 
         dlg.exec() if PYQT6 else dlg.exec_()
+
+    # ── Settings ──────────────────────────────────────────────────
+
+    def open_settings(self):
+        try:
+            from calibre_plugins.furigana_ruby.config import ConfigWidget
+        except ImportError:
+            from config import ConfigWidget
+
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('FuriganaRuby — Preferences')
+        dlg.setMinimumWidth(500)
+        vl = QVBoxLayout(dlg)
+        widget = ConfigWidget()
+        vl.addWidget(widget)
+        bb = QDialogButtonBox(
+            (QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            if PYQT6 else (QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        )
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        vl.addWidget(bb)
+        if (dlg.exec() if PYQT6 else dlg.exec_()):
+            widget.save_settings()
 
     # ── About ─────────────────────────────────────────────────────
 
