@@ -30,7 +30,7 @@ class FuriganaPluginBase(InterfaceActionBase):
     description             = 'Add/remove furigana ruby annotations to Japanese EPUBs'
     supported_platforms     = ['windows', 'osx', 'linux']
     author                  = 'Furigana Ruby Plugin'
-    version                 = (1, 3, 1)
+    version                 = (1, 4, 1)
     minimum_calibre_version = (6, 0, 0)
     actual_plugin           = 'calibre_plugins.furigana_ruby.action:FuriganaAction'
 

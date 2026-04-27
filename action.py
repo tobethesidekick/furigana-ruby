@@ -1,10 +1,9 @@
 """
-action.py  v12
-Unified level-state dialog:
-  - Single "Edit Ruby…" button; checkboxes show which levels are currently
-    annotated in the EPUB (pre-checked = already present).
-  - Checking a new level → adds it; unchecking an existing level → removes it.
-  - "Open in Viewer" closes the status modal automatically.
+action.py  v13
+Unified ruby dialog:
+  - One "Furigana (Ruby) Customization" dialog handles single and bulk book selection.
+  - Level checkboxes at top; per-book sub-info (language, publisher count, auto count).
+  - "Open in Viewer" shown dynamically only when exactly 1 eligible book is selected.
 """
 
 import os
@@ -47,108 +46,6 @@ prefs.defaults['auto_ruby_enabled']      = False
 prefs.defaults['auto_ruby_levels']       = ['N1', 'N2', 'N3']
 
 _ALL_LEVELS = {'N1', 'N2', 'N3', 'N4', 'N5', 'unlisted'}
-
-
-# ── Unified level-manage dialog ───────────────────────────────────────────────
-
-class LevelManageDialog(QDialog):
-    """
-    Shows all JLPT levels as checkboxes.
-    Levels that are currently annotated in the EPUB are pre-checked.
-    On Apply: checked - current  → levels to ADD
-               current - checked → levels to REMOVE
-    """
-    def __init__(self, parent, current_levels=None):
-        super().__init__(parent)
-        self.setWindowTitle('Ruby Annotation Levels')
-        self.setMinimumWidth(440)
-
-        if current_levels is None:
-            current_levels = set()
-
-        layout = QVBoxLayout()
-        self.setLayout(layout)
-
-        if current_levels:
-            present = ', '.join(
-                l for l in ['N1','N2','N3','N4','N5','unlisted']
-                if l in current_levels
-            )
-            desc_text = (
-                f'<b>Currently annotated:</b> {present}<br>'
-                '<small>☑ = has ruby &nbsp;·&nbsp; ☐ = no ruby yet<br>'
-                'Check a level to <b>add</b> ruby; uncheck to <b>remove</b> it.</small>'
-            )
-        else:
-            desc_text = (
-                '<b>No auto ruby yet.</b><br>'
-                '<small>Check the levels you want to add furigana for.</small>'
-            )
-
-        desc = QLabel(desc_text)
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
-
-        grp = QGroupBox('JLPT Levels')
-        grp_layout = QVBoxLayout()
-        self._cbs = {}
-        for level, label in [
-            ('N1',       'N1  —  Rare & literary kanji'),
-            ('N2',       'N2  —  Advanced kanji'),
-            ('N3',       'N3  —  Intermediate kanji  ★'),
-            ('N4',       'N4  —  Basic kanji  (学、週、料理…)'),
-            ('N5',       'N5  —  Elementary kanji  (日、人、山…)'),
-            ('unlisted', 'Unlisted  —  Kanji not in any JLPT list'),
-        ]:
-            cb = QCheckBox(label)
-            cb.setChecked(level in current_levels)
-            self._cbs[level] = cb
-            grp_layout.addWidget(cb)
-        grp.setLayout(grp_layout)
-        layout.addWidget(grp)
-
-        layout.addWidget(QLabel('Quick select:'))
-        btn_row = QHBoxLayout()
-        for label, levels in [
-            ('None',    set()),
-            ('N1',      {'N1'}),
-            ('N1–N2',   {'N1', 'N2'}),
-            ('N1–N3 ★', {'N1', 'N2', 'N3'}),
-            ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
-            ('All',     _ALL_LEVELS),
-        ]:
-            btn = QPushButton(label)
-            btn.setFixedHeight(26)
-            btn.clicked.connect(lambda _, lvls=levels: self._apply(lvls))
-            btn_row.addWidget(btn)
-        layout.addLayout(btn_row)
-
-        note = QLabel(
-            '<small><i>Publisher ruby is never modified.<br>'
-            'Changes only affect auto-generated (blue) ruby.</i></small>'
-        )
-        note.setWordWrap(True)
-        layout.addWidget(note)
-
-        try:
-            std = QDialogButtonBox.StandardButton
-            bb = QDialogButtonBox(std.Ok | std.Cancel)
-        except AttributeError:
-            bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        ok_btn = bb.button(
-            QDialogButtonBox.StandardButton.Ok if PYQT6 else QDialogButtonBox.Ok)
-        if ok_btn:
-            ok_btn.setText('Apply')
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        layout.addWidget(bb)
-
-    def _apply(self, levels):
-        for level, cb in self._cbs.items():
-            cb.setChecked(level in levels)
-
-    def selected_levels(self):
-        return {lvl for lvl, cb in self._cbs.items() if cb.isChecked()}
 
 
 # ── Chinese conversion worker ─────────────────────────────────────────────────
@@ -394,6 +291,75 @@ class FuriganaWorker(QThread):
             self.finished.emit(False, 0, [], traceback.format_exc())
 
 
+class BulkFuriganaWorker(QThread):
+    """Process ruby add/remove for multiple EPUBs sequentially.
+
+    tasks = [{'book_id': int, 'epub': str,
+               'to_add': set, 'to_remove': set, 'current_levels': set}]
+    finished result: [(book_id, tmp_path_or_None, ruby_delta, error_or_None)]
+    """
+    book_started  = pyqtSignal(int)
+    book_finished = pyqtSignal(int, bool, int, str)
+    finished      = pyqtSignal(bool, list, str)
+
+    def __init__(self, tasks):
+        super().__init__()
+        self.tasks = tasks
+
+    def run(self):
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.furigana_engine import process_epub_file
+            except ImportError:
+                from furigana_engine import process_epub_file
+
+            results = []
+            for task in self.tasks:
+                self.book_started.emit(task['book_id'])
+                to_add    = task['to_add']
+                to_remove = task['to_remove']
+                current   = task['current_levels']
+                epub      = task['epub']
+                tmp_r = tmp_a = None
+                try:
+                    src        = epub
+                    ruby_delta = 0
+                    if to_remove:
+                        rl    = None if to_remove >= current else to_remove
+                        tmp_r = tempfile.mktemp(suffix='.epub')
+                        _, cnt, _ = process_epub_file(epub, tmp_r, mode='remove',
+                                                      remove_levels=rl)
+                        ruby_delta += cnt
+                        src = tmp_r
+                    if to_add:
+                        al    = None if to_add >= _ALL_LEVELS else to_add
+                        tmp_a = tempfile.mktemp(suffix='.epub')
+                        _, cnt, _ = process_epub_file(src, tmp_a, mode='add',
+                                                      annotate_levels=al)
+                        ruby_delta += cnt
+                        if tmp_r:
+                            try: os.unlink(tmp_r)
+                            except: pass
+                            tmp_r = None
+                        final = tmp_a
+                    else:
+                        final = tmp_r
+                    results.append((task['book_id'], final, ruby_delta, None))
+                    self.book_finished.emit(task['book_id'], True, ruby_delta, '')
+                except Exception as e:
+                    for t in (tmp_r, tmp_a):
+                        try:
+                            if t: os.unlink(t)
+                        except: pass
+                    results.append((task['book_id'], None, 0, str(e)))
+                    self.book_finished.emit(task['book_id'], False, 0, str(e))
+
+            self.finished.emit(True, results, '')
+        except Exception:
+            import traceback
+            self.finished.emit(False, [], traceback.format_exc())
+
+
 # ── Main action ───────────────────────────────────────────────────────────────
 
 class FuriganaAction(InterfaceAction):
@@ -535,189 +501,644 @@ class FuriganaAction(InterfaceAction):
         ids = self._selected_ids()
         if not ids:
             warning_dialog(self.gui, 'No Book Selected',
-                'Select a Japanese EPUB book first.', show=True)
+                'Select one or more Japanese EPUB books first.', show=True)
             return
-        self._show_status_dialog(ids[0])
+        self._show_ruby_dialog(ids)
 
-    # ── Unified status dialog ─────────────────────────────────────
+    # ── Unified ruby dialog (single + bulk) ───────────────────────
 
-    def _show_status_dialog(self, book_id):
-        path = self._epub_path(book_id)
-        if not path:
-            warning_dialog(self.gui, 'No EPUB',
-                'No EPUB format found for this book.', show=True)
+    def _show_ruby_dialog(self, book_ids):
+        if not self._ensure_deps():
             return
 
-        # ── Detect book language ──────────────────────────────────
         try:
             from calibre_plugins.furigana_ruby.lang_detect import (
                 detect_book_language, lang_display)
         except ImportError:
             from lang_detect import detect_book_language, lang_display
 
-        lang_info    = detect_book_language(path)
-        ruby_allowed = not (lang_info['is_chinese'] or lang_info['is_korean'])
-
         db = self.gui.current_db.new_api
+
+        # ── Scan all selected books ───────────────────────────────
+        book_rows      = []
+        excluded_count = 0
+
+        for book_id in book_ids:
+            title     = db.field_for('title', book_id) or f'Book {book_id}'
+            epub_path = self._epub_path(book_id)
+            if not epub_path:
+                excluded_count += 1
+                continue
+            try:
+                lang_info = detect_book_language(epub_path)
+            except Exception:
+                lang_info = {'lang_raw': '', 'is_japanese': False,
+                             'is_chinese': False, 'is_korean': False}
+            ruby_allowed = not (lang_info['is_chinese'] or lang_info['is_korean'])
+            lang_label   = lang_display(lang_info) if lang_info['lang_raw'] else 'Unknown language'
+            if ruby_allowed:
+                try:
+                    auto_count, pub_count, _ = self._scan_epub(epub_path)
+                except Exception:
+                    auto_count = pub_count = 0
+                current_levels = self._get_annotated_levels(epub_path)
+            else:
+                auto_count = pub_count = 0
+                current_levels = set()
+
+            book_rows.append({
+                'book_id':        book_id,
+                'title':          title,
+                'epub':           epub_path,
+                'lang_info':      lang_info,
+                'lang_label':     lang_label,
+                'ruby_allowed':   ruby_allowed,
+                'auto_count':     auto_count,
+                'pub_count':      pub_count,
+                'current_levels': current_levels,
+            })
+
+        eligible_rows = [r for r in book_rows if r['ruby_allowed']]
+
+        def _selection_summary():
+            n_eligible = len(eligible_rows)
+            n_other    = len(book_rows) - n_eligible
+            parts = []
+            if n_eligible:
+                parts.append(f'{n_eligible} Japanese EPUB(s)')
+            if n_other:
+                parts.append(f'{n_other} not applicable (non-Japanese)')
+            if excluded_count:
+                parts.append(f'{excluded_count} skipped (no EPUB)')
+            return (f'Selection: {len(book_ids)} book(s) — '
+                    + (' · '.join(parts) if parts else 'none applicable'))
 
         # ── Build dialog ──────────────────────────────────────────
         dlg = QDialog(self.gui)
-        dlg.setWindowTitle('Furigana Status')
-        dlg.setMinimumWidth(580)
-        dlg.setMinimumHeight(400)
-        dlg.resize(600, 420)
+        dlg.setWindowTitle('Furigana (Ruby) Customization')
+        dlg.setMinimumWidth(700)
+        dlg.setMinimumHeight(520)
+        dlg.resize(720, 660)
 
         vl = QVBoxLayout()
-        vl.setSpacing(10)
+        vl.setSpacing(6)
         dlg.setLayout(vl)
 
-        te = QTextEdit()
-        te.setReadOnly(True)
-        sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
-        te.setSizePolicy(sp.Expanding, sp.Expanding)
-        vl.addWidget(te)
+        # Description — line 1 fixed, line 2 depends on keep_original
+        desc1 = QLabel(
+            'Add/Update the Furigana (Ruby) to ebooks based on the selected JLPT '
+            'levels. Publisher furigana is always preserved.')
+        desc1.setWordWrap(True)
+        vl.addWidget(desc1)
 
-        # ── Button row: [Edit Ruby…] ——— [Open in Viewer] [Close] ─
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        if prefs['keep_original']:
+            desc2_text = ('* A copy of the original file will be saved based on '
+                          'your plugin Settings.')
+        else:
+            desc2_text = ('* Modified file will replace the original file based on '
+                          'your plugin Settings.')
+        desc2 = QLabel(desc2_text)
+        desc2.setWordWrap(True)
+        vl.addWidget(desc2)
 
-        btn_edit   = QPushButton('✦ Edit Ruby…')
+        sep = QFrame()
+        try:
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setFrameShadow(QFrame.Shadow.Sunken)
+        except AttributeError:
+            sep.setFrameShape(QFrame.HLine)
+            sep.setFrameShadow(QFrame.Sunken)
+        vl.addWidget(sep)
+
+        # ── JLPT collapsible panel ────────────────────────────────
+        saved_levels        = set(prefs['annotate_levels'])
+        level_cbs           = {}
+        _pre_expand_levels  = [None]
+
+        _LEVEL_ORDER = ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']
+
+        def _current_sel_text():
+            checked = [l for l in _LEVEL_ORDER
+                       if level_cbs.get(l, QCheckBox()).isChecked()]
+            return 'Current Selection: ' + (', '.join(checked) if checked else 'None')
+
+        # Collapsed view
+        collapsed_container = QWidget()
+        coll_vl = QVBoxLayout()
+        coll_vl.setContentsMargins(0, 0, 0, 0)
+        coll_vl.setSpacing(2)
+
+        coll_hdr_hl = QHBoxLayout()
+        coll_hdr_hl.setContentsMargins(0, 0, 0, 0)
+        coll_hdr_hl.setSpacing(6)
+        coll_title = QLabel('<b>JLPT Levels Configuration</b>')
+        btn_customize = QPushButton('Customize')
+        btn_customize.setFlat(True)
+        _link_style = ('color: #0066cc; text-decoration: underline; '
+                       'border: none; padding: 0;')
+        btn_customize.setStyleSheet(_link_style)
+        try:
+            btn_customize.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            btn_customize.setCursor(Qt.PointingHandCursor)
+        coll_hdr_hl.addWidget(coll_title)
+        coll_hdr_hl.addWidget(btn_customize)
+        coll_hdr_hl.addStretch()
+
+        current_sel_lbl = QLabel('')
+        current_sel_lbl.setStyleSheet('color: #545454;')
+
+        coll_vl.addLayout(coll_hdr_hl)
+        coll_vl.addWidget(current_sel_lbl)
+        collapsed_container.setLayout(coll_vl)
+        vl.addWidget(collapsed_container)
+
+        # Expanded panel (hidden by default)
+        expanded_panel = QFrame()
+        try:
+            expanded_panel.setFrameShape(QFrame.Shape.StyledPanel)
+            expanded_panel.setFrameShadow(QFrame.Shadow.Raised)
+        except AttributeError:
+            expanded_panel.setFrameShape(QFrame.StyledPanel)
+            expanded_panel.setFrameShadow(QFrame.Raised)
+        expanded_panel.setStyleSheet(
+            'QFrame { border: 1px solid #b0b0b0; border-radius: 3px; }')
+        exp_vl = QVBoxLayout()
+        exp_vl.setContentsMargins(8, 6, 8, 6)
+        exp_vl.setSpacing(4)
+
+        exp_hdr_hl = QHBoxLayout()
+        exp_hdr_hl.setContentsMargins(0, 0, 0, 0)
+        exp_hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
+        btn_save_levels = QPushButton('Save')
+        btn_save_levels.setFlat(True)
+        btn_save_levels.setStyleSheet(_link_style)
+        try:
+            btn_save_levels.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            btn_save_levels.setCursor(Qt.PointingHandCursor)
+        btn_x = QPushButton('✕')
+        btn_x.setFlat(True)
+        btn_x.setFixedSize(18, 18)
+        btn_x.setStyleSheet('color: #545454; border: none; padding: 0; font-size: 12px;')
+        try:
+            btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            btn_x.setCursor(Qt.PointingHandCursor)
+        exp_hdr_hl.addWidget(btn_save_levels)
+        exp_hdr_hl.addStretch()
+        exp_hdr_hl.addWidget(btn_x)
+        exp_vl.addLayout(exp_hdr_hl)
+
+        for level, label, bold in [
+            ('N1',       'N1  —  Rare literary kanji',              True),
+            ('N2',       'N2  —  Advanced kanji',                   True),
+            ('N3',       'N3  —  Intermediate kanji  ★',            True),
+            ('N4',       'N4  —  Basic kanji  (学、週、料理…)',      False),
+            ('N5',       'N5  —  Elementary kanji  (日、人、山…)',   False),
+            ('unlisted', 'Unlisted  —  Kanji not in any JLPT list',  False),
+        ]:
+            cb = QCheckBox(label)
+            cb.setChecked(level in saved_levels)
+            if bold:
+                f = cb.font(); f.setBold(True); cb.setFont(f)
+            level_cbs[level] = cb
+            exp_vl.addWidget(cb)
+
+        quick_hl = QHBoxLayout()
+        quick_hl.addWidget(QLabel('Quick select:'))
+        for qlabel, qlevels in [
+            ('None',    set()),
+            ('N1',      {'N1'}),
+            ('N1–N2',   {'N1', 'N2'}),
+            ('N1–N3 ★', {'N1', 'N2', 'N3'}),
+            ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
+            ('N1–N5',   {'N1', 'N2', 'N3', 'N4', 'N5'}),
+            ('All',     _ALL_LEVELS),
+        ]:
+            qbtn = QPushButton(qlabel)
+            qbtn.setFixedHeight(26)
+            qbtn.clicked.connect(
+                lambda _, lvls=qlevels:
+                    [cb.setChecked(lvl in lvls) for lvl, cb in level_cbs.items()])
+            quick_hl.addWidget(qbtn)
+        quick_hl.addStretch()
+        exp_vl.addLayout(quick_hl)
+
+        grp_note = QLabel('<small><i>Publisher ruby is never modified. '
+                          'Changes only affect auto-generated (blue) ruby.</i></small>')
+        grp_note.setWordWrap(True)
+        exp_vl.addWidget(grp_note)
+        expanded_panel.setLayout(exp_vl)
+        expanded_panel.setVisible(False)
+        vl.addWidget(expanded_panel)
+
+        # Expand / collapse helpers
+        def _expand():
+            _pre_expand_levels[0] = {lvl for lvl, cb in level_cbs.items()
+                                     if cb.isChecked()}
+            collapsed_container.setVisible(False)
+            expanded_panel.setVisible(True)
+
+        def _collapse_save():
+            prefs['annotate_levels'] = sorted(
+                lvl for lvl, cb in level_cbs.items() if cb.isChecked())
+            current_sel_lbl.setText(_current_sel_text())
+            expanded_panel.setVisible(False)
+            collapsed_container.setVisible(True)
+
+        def _collapse_cancel():
+            prev = _pre_expand_levels[0] or set()
+            for lvl, cb in level_cbs.items():
+                cb.setChecked(lvl in prev)
+            expanded_panel.setVisible(False)
+            collapsed_container.setVisible(True)
+
+        btn_customize.clicked.connect(_expand)
+        btn_save_levels.clicked.connect(_collapse_save)
+        btn_x.clicked.connect(_collapse_cancel)
+
+        # Initialise the collapsed label now that level_cbs is built
+        current_sel_lbl.setText(_current_sel_text())
+
+        # ── Book list header ──────────────────────────────────────
+        hdr_widget = QWidget()
+        hdr_widget.setObjectName('rubyHdr')
+        hdr_widget.setStyleSheet(
+            '#rubyHdr { background-color: #d4d4d4; '
+            'border: 1px solid #b8b8b8; border-bottom: none; }')
+        hdr_layout = QHBoxLayout()
+        hdr_layout.setContentsMargins(4, 3, 4, 3)
+        hdr_layout.setSpacing(4)
+
+        header_cb = QCheckBox()
+        header_cb.setTristate(True)
+        header_cb.setToolTip('Select / deselect all applicable books')
+        hdr_cb_box = QWidget()
+        hdr_cb_box.setFixedWidth(20)
+        hdr_cb_inner = QHBoxLayout()
+        hdr_cb_inner.setContentsMargins(0, 0, 0, 0)
+        hdr_cb_inner.setSpacing(0)
+        hdr_cb_inner.addStretch()
+        hdr_cb_inner.addWidget(header_cb)
+        hdr_cb_inner.addStretch()
+        hdr_cb_box.setLayout(hdr_cb_inner)
+
+        hdr_books_lbl  = QLabel('<b>Books</b>')
+        hdr_status_lbl = QLabel('<b>Status</b>')
+        hdr_status_lbl.setMinimumWidth(170)
+        try:
+            hdr_status_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        except AttributeError:
+            hdr_status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        hdr_layout.addWidget(hdr_cb_box)
+        hdr_layout.addWidget(hdr_books_lbl, 3)
+        hdr_layout.addWidget(hdr_status_lbl, 1)
+        hdr_widget.setLayout(hdr_layout)
+
+        # ── Scrollable book list ──────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet('QScrollArea { border: 1px solid #b8b8b8; border-top: none; }')
+        scroll.setMinimumHeight(5 * 58)
+        sp_pol = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        scroll.setSizePolicy(sp_pol.Expanding, sp_pol.Expanding)
+
+        table_container = QWidget()
+        table_vl = QVBoxLayout()
+        table_vl.setSpacing(0)
+        table_vl.setContentsMargins(0, 0, 0, 0)
+        table_vl.addWidget(hdr_widget)
+        table_vl.addWidget(scroll)
+        table_container.setLayout(table_vl)
+
+        list_widget = QWidget()
+        list_layout = QVBoxLayout()
+        list_layout.setSpacing(3)
+        list_layout.setContentsMargins(4, 4, 4, 4)
+        list_widget.setLayout(list_layout)
+
+        _SUB_STYLE = 'color: #545454; font-size: 11px;'
+        _DIM_STYLE  = 'color: #959595;'
+
+        checkboxes    = []
+        status_labels = {}
+        sub_labels    = {}
+        sub_base_text = {}
+        cb_map        = {}
+        applicable_ids = set(r['book_id'] for r in eligible_rows)
+
+        for row in book_rows:
+            cb = QCheckBox()
+            cb.setVisible(row['ruby_allowed'])
+            cb.setChecked(row['ruby_allowed'])
+            cb_box = QWidget()
+            cb_box.setFixedWidth(20)
+            cb_box_inner = QHBoxLayout()
+            cb_box_inner.setContentsMargins(0, 0, 0, 0)
+            cb_box_inner.setSpacing(0)
+            cb_box_inner.addStretch()
+            cb_box_inner.addWidget(cb)
+            cb_box_inner.addStretch()
+            cb_box.setLayout(cb_box_inner)
+
+            title_lbl = ElidedLabel(row['title'])
+            title_lbl.setToolTip(row['title'])
+            title_lbl.setSizePolicy(sp_pol.Expanding, sp_pol.Preferred)
+            if not row['ruby_allowed']:
+                title_lbl.setStyleSheet(_DIM_STYLE)
+            title_lbl.clicked.connect(
+                lambda _=None, c=cb, bid=row['book_id']:
+                    c.toggle() if bid in applicable_ids and c.isEnabled() else None)
+
+            status_lbl = QLabel('' if row['ruby_allowed'] else 'Not applicable')
+            try:
+                status_lbl.setAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            except AttributeError:
+                status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            status_lbl.setMinimumWidth(170)
+            if not row['ruby_allowed']:
+                status_lbl.setStyleSheet('color: #959595;')
+
+            if row['ruby_allowed']:
+                sub_text = (f'{row["lang_label"]} · '
+                            f'Publisher: {row["pub_count"]:,} · '
+                            f'Auto: {row["auto_count"]:,}')
+            else:
+                sub_text = f'{row["lang_label"]} · EPUB'
+
+            sub_lbl = QLabel(sub_text)
+            sub_lbl.setStyleSheet(_SUB_STYLE if row['ruby_allowed'] else _DIM_STYLE)
+
+            top_row = QHBoxLayout()
+            top_row.setSpacing(4)
+            top_row.setContentsMargins(0, 0, 0, 0)
+            top_row.addWidget(cb_box)
+            top_row.addWidget(title_lbl, 3)
+            top_row.addWidget(status_lbl, 1)
+
+            sub_row = QHBoxLayout()
+            sub_row.setContentsMargins(24, 0, 0, 2)
+            sub_row.addWidget(sub_lbl)
+            sub_row.addStretch()
+
+            container_layout = QVBoxLayout()
+            container_layout.setSpacing(1)
+            container_layout.setContentsMargins(4, 4, 4, 4)
+            container_layout.addLayout(top_row)
+            container_layout.addLayout(sub_row)
+
+            container = QWidget()
+            container.setLayout(container_layout)
+            list_layout.addWidget(container)
+
+            checkboxes.append(cb)
+            cb_map[row['book_id']]        = cb
+            status_labels[row['book_id']] = status_lbl
+            sub_labels[row['book_id']]    = sub_lbl
+            sub_base_text[row['book_id']] = sub_text
+
+        list_layout.addStretch()
+        scroll.setWidget(list_widget)
+        vl.addWidget(table_container)
+
+        # Summary result panel
+        result_te = QTextEdit()
+        result_te.setReadOnly(True)
+        result_te.setFixedHeight(70)
+        result_te.setSizePolicy(sp_pol.Expanding, sp_pol.Fixed)
+        result_te.setPlainText(_selection_summary())
+        vl.addWidget(result_te)
+
+        # ── Buttons ───────────────────────────────────────────────
+        btn_row_hl = QHBoxLayout()
+
         btn_viewer = QPushButton('📖 Open in Viewer')
-        btn_close  = QPushButton('Close')
+        btn_viewer.setMinimumWidth(150)
+        btn_viewer.setVisible(len(eligible_rows) == 1)
 
-        btn_edit.setMinimumWidth(110)
-        btn_viewer.setMinimumWidth(130)
+        btn_apply = QPushButton('Add Ruby')
+        btn_apply.setMinimumWidth(90)
+        btn_close = QPushButton('Close')
         btn_close.setMinimumWidth(70)
 
-        btn_row.addWidget(btn_edit)
-        btn_row.addStretch()
-        btn_row.addWidget(btn_viewer)
-        btn_row.addWidget(btn_close)
+        btn_row_hl.addWidget(btn_viewer)
+        btn_row_hl.addStretch()
+        btn_row_hl.addWidget(btn_close)
+        btn_row_hl.addWidget(btn_apply)
+        vl.addLayout(btn_row_hl)
 
-        vl.addLayout(btn_row)
+        # ── Header checkbox logic ─────────────────────────────────
+        def _eligible_cbs():
+            return [cb_map[bid] for bid in applicable_ids if bid in cb_map]
 
-        # ── Refresh helper ────────────────────────────────────────
-        def refresh(result_msg=None):
-            """Re-scan the EPUB and update text + button states."""
+        def _update_apply_state():
+            any_checked = any(cb.isChecked() for cb in _eligible_cbs())
+            btn_apply.setEnabled(any_checked)
+            _update_header_cb()
+
+        def _update_header_cb():
+            ecbs = _eligible_cbs()
+            header_cb.blockSignals(True)
             try:
-                auto_count, pub_count, file_count = self._scan_epub(path)
-            except Exception as e:
-                te.setPlainText(f'⚠ Error scanning EPUB:\n{e}')
+                if not ecbs:
+                    state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                else:
+                    n = sum(1 for cb in ecbs if cb.isChecked())
+                    if n == 0:
+                        state = (Qt.CheckState.Unchecked if PYQT6 else Qt.Unchecked)
+                    elif n == len(ecbs):
+                        state = (Qt.CheckState.Checked if PYQT6 else Qt.Checked)
+                    else:
+                        state = (Qt.CheckState.PartiallyChecked
+                                 if PYQT6 else Qt.PartiallyChecked)
+                header_cb.setCheckState(state)
+            except AttributeError:
+                pass
+            finally:
+                header_cb.blockSignals(False)
+
+        def _on_header_clicked():
+            ecbs        = _eligible_cbs()
+            all_checked = bool(ecbs) and all(cb.isChecked() for cb in ecbs)
+            for cb in ecbs:
+                cb.setChecked(not all_checked)
+            _update_apply_state()
+
+        def _lock_controls():
+            header_cb.setEnabled(False)
+            for cb in checkboxes:
+                cb.setEnabled(False)
+            for lvl_cb in level_cbs.values():
+                lvl_cb.setEnabled(False)
+            btn_apply.setEnabled(False)
+
+        def _unlock_controls():
+            header_cb.setEnabled(True)
+            for cb in checkboxes:
+                if cb.isVisible():
+                    cb.setEnabled(True)
+            for lvl_cb in level_cbs.values():
+                lvl_cb.setEnabled(True)
+            _update_apply_state()
+
+        # ── Apply handler ─────────────────────────────────────────
+        def _on_apply():
+            checked_levels = {lvl for lvl, cb in level_cbs.items() if cb.isChecked()}
+
+            tasks = []
+            for row in book_rows:
+                cb = cb_map[row['book_id']]
+                if not (cb.isVisible() and cb.isChecked()):
+                    continue
+                to_add    = checked_levels - row['current_levels']
+                to_remove = row['current_levels'] - checked_levels
+                if to_add or to_remove:
+                    tasks.append({
+                        'book_id':        row['book_id'],
+                        'epub':           row['epub'],
+                        'to_add':         to_add,
+                        'to_remove':      to_remove,
+                        'current_levels': row['current_levels'],
+                    })
+
+            if not tasks:
+                result_te.setPlainText(
+                    '⚠ Nothing to do — selected books already match '
+                    'the chosen levels.\n\n' + _selection_summary())
                 return
 
-            title    = db.field_for('title', book_id) or 'this book'
+            prefs['annotate_levels'] = sorted(checked_levels)
 
-            # Language line (shown when detected)
-            lang_label = lang_display(lang_info)
-            lang_line  = (f'  Detected language:       {lang_label}\n\n'
-                          if lang_info['lang_raw'] else '')
+            _lock_controls()
+            for row in book_rows:
+                cb = cb_map[row['book_id']]
+                if cb.isVisible() and cb.isChecked():
+                    sl = status_labels[row['book_id']]
+                    sl.setText('⏳ Processing…')
+                    sl.setStyleSheet('color: #545454;')
+            QApplication.processEvents()
 
-            if not ruby_allowed:
-                # Chinese / Korean book — ruby not applicable
-                status = (
-                    f'📖  "{title}"\n\n'
-                    f'{lang_line}'
-                    f'Ruby annotation is designed for Japanese text.\n'
-                    f'"Edit Ruby…" is unavailable for this book.\n\n'
-                    f'↔ Convert Layout is still available for\n'
-                    f'  vertical ↔ horizontal conversion.'
-                )
-            elif auto_count == 0 and pub_count == 0:
-                status = (f'❌  No ruby in "{title}"\n\n'
-                          f'{lang_line}'
-                          f'No furigana annotations found.\n'
-                          f'Click "Edit Ruby…" to add them.')
-            elif auto_count == 0:
-                status = (f'📖  Publisher ruby only — "{title}"\n\n'
-                          f'{lang_line}'
-                          f'  Publisher annotations:  {pub_count:,}\n'
-                          f'  Auto-generated:         0\n\n'
-                          f'Click "Edit Ruby…" to fill in remaining kanji.')
-            else:
-                status = (f'✅  Furigana active — "{title}"\n\n'
-                          f'{lang_line}'
-                          f'  Auto-generated (blue):   {auto_count:,}\n'
-                          f'  Publisher (original):    {pub_count:,}\n'
-                          f'  Files with ruby:         {file_count}\n\n'
-                          f'In viewer — Cmd+Shift+R to toggle:\n'
-                          f'  🈳 All → 📖 Publisher only → 🈚 Off')
+            done    = [False]
+            outcome = [None]
 
-            full_text = (result_msg + '\n\n' + ('─' * 40) + '\n\n' + status
-                         if result_msg else status)
-            te.setPlainText(full_text)
+            worker = BulkFuriganaWorker(tasks)
 
-        # ── Edit Ruby handler ─────────────────────────────────────
-        def on_edit():
-            if not self._ensure_deps():
+            def on_book_started(book_id):
+                sl = status_labels.get(book_id)
+                if sl:
+                    sl.setText('⏳ Processing…')
+                    sl.setStyleSheet('color: #545454;')
+
+            def on_book_finished(book_id, ok, ruby_delta, msg):
+                sl = status_labels.get(book_id)
+                if sl:
+                    if ok:
+                        delta_str = (f'+{ruby_delta:,}' if ruby_delta >= 0
+                                     else str(ruby_delta))
+                        sl.setText(f'✅ Done ({delta_str})')
+                        sl.setStyleSheet('color: green;')
+                    else:
+                        sl.setText('⚠ Error')
+                        sl.setStyleSheet('color: red;')
+                        sl.setToolTip(msg)
+
+            def on_done(ok, results, tb):
+                done[0]    = True
+                outcome[0] = (ok, results, tb)
+
+            worker.book_started.connect(on_book_started)
+            worker.book_finished.connect(on_book_finished)
+            worker.finished.connect(on_done)
+            worker.start()
+
+            while not done[0]:
+                QApplication.processEvents()
+            worker.wait()
+
+            ok2, results, tb = outcome[0]
+
+            if not ok2:
+                result_te.setPlainText(f'⚠ Unexpected error:\n{tb}')
+                _unlock_controls()
                 return
 
-            # Detect which levels are currently in the EPUB
-            current_levels = self._get_annotated_levels(path)
+            saved       = 0
+            save_errors = []
+            task_map    = {t['book_id']: t for t in tasks}
 
-            level_dlg = LevelManageDialog(self.gui, current_levels=current_levels)
-            accepted = (level_dlg.exec() == QDialog.DialogCode.Accepted
-                        if PYQT6 else level_dlg.exec_() == QDialog.Accepted)
-            if not accepted:
-                return
+            for book_id, tmp_path, ruby_delta, err in results:
+                sl  = status_labels.get(book_id)
+                row = next((r for r in book_rows if r['book_id'] == book_id), None)
+                if err or not tmp_path:
+                    save_errors.append(f'Book {book_id}: {err}')
+                    if sl and not sl.text().startswith('⚠'):
+                        sl.setText('⚠ Error')
+                        sl.setStyleSheet('color: red;')
+                    continue
+                try:
+                    if prefs['keep_original']:
+                        existing = db.formats(book_id)
+                        if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
+                            orig = task_map[book_id]['epub']
+                            db.add_format(book_id, 'ORIGINAL_EPUB', orig, replace=False)
+                    db.add_format(book_id, 'EPUB', tmp_path, replace=True)
+                    saved += 1
+                    # Update in-memory state so re-apply works correctly
+                    if row:
+                        row['current_levels'] = checked_levels.copy()
+                        sub_lbl = sub_labels.get(book_id)
+                        if sub_lbl:
+                            new_auto  = (row['auto_count'] + ruby_delta
+                                         if ruby_delta >= 0 else max(0, row['auto_count'] + ruby_delta))
+                            row['auto_count'] = new_auto
+                            sub_lbl.setText(
+                                f'{row["lang_label"]} · '
+                                f'Publisher: {row["pub_count"]:,} · '
+                                f'Auto: {new_auto:,}')
+                except Exception as e:
+                    save_errors.append(f'Book {book_id}: save failed: {e}')
+                    if sl:
+                        sl.setText('⚠ Save error')
+                        sl.setStyleSheet('color: red;')
+                        sl.setToolTip(str(e))
+                finally:
+                    try: os.unlink(tmp_path)
+                    except: pass
 
-            new_levels = level_dlg.selected_levels()
+            self.gui.library_view.model().refresh_ids(
+                [r[0] for r in results])
 
-            levels_to_add    = new_levels - current_levels
-            levels_to_remove = current_levels - new_levels
+            lines = [f'✅ Saved {saved} book(s)']
+            if save_errors:
+                lines.append(f'⚠ {len(save_errors)} error(s):')
+                lines += [f'  {e}' for e in save_errors[:5]]
+            lines += ['', _selection_summary()]
+            result_te.setPlainText('\n'.join(lines))
+            _unlock_controls()
 
-            if not levels_to_add and not levels_to_remove:
-                return   # nothing changed — close picker silently
-
-            btn_edit.setEnabled(False)
-            result_parts = []
-
-            # ── Remove first ──────────────────────────────────────
-            if levels_to_remove:
-                # None = full strip (faster); subset = selective strip
-                rl = (None if levels_to_remove >= current_levels
-                      else levels_to_remove)
-                msg = self._run_epub(
-                    book_id, path, 'remove', None,
-                    display_levels=levels_to_remove,
-                    remove_levels=rl,
-                )
-                result_parts.append(msg)
-
-            # ── Add next (re-fetch path in case Calibre moved it) ─
-            if levels_to_add:
-                updated_path = self._epub_path(book_id) or path
-                # Save last-used levels for future default
-                from calibre.utils.config import JSONConfig
-                JSONConfig('plugins/furigana_ruby')['annotate_levels'] = \
-                    sorted(levels_to_add)
-                al = None if levels_to_add >= _ALL_LEVELS else levels_to_add
-                msg = self._run_epub(
-                    book_id, updated_path, 'add',
-                    annotate_levels=al,
-                    display_levels=levels_to_add,
-                )
-                result_parts.append(msg)
-
-            self.gui.library_view.model().refresh_ids([book_id])
-            btn_edit.setEnabled(True)
-            refresh('\n'.join(result_parts))
-
-        # ── Viewer: also closes the modal ─────────────────────────
-        def on_viewer():
+        # ── Viewer button ─────────────────────────────────────────
+        def _on_viewer():
             dlg.reject()
-            self._open_in_viewer(book_id)
+            self._open_in_viewer(eligible_rows[0]['book_id'])
 
-        # Disable Edit Ruby for non-Japanese books
-        if not ruby_allowed:
-            btn_edit.setEnabled(False)
-            btn_edit.setToolTip('Ruby annotation is for Japanese text only')
-
-        btn_edit.clicked.connect(on_edit)
-        btn_viewer.clicked.connect(on_viewer)
+        # Wire signals
+        for cb in checkboxes:
+            cb.stateChanged.connect(lambda _: _update_apply_state())
+        header_cb.clicked.connect(_on_header_clicked)
+        btn_apply.clicked.connect(_on_apply)
+        btn_viewer.clicked.connect(_on_viewer)
         btn_close.clicked.connect(dlg.reject)
 
-        # Initial render
-        refresh()
+        if not eligible_rows:
+            btn_apply.setEnabled(False)
+            btn_apply.setToolTip('No Japanese EPUB books in selection.')
+            header_cb.setEnabled(False)
+
+        _update_apply_state()
 
         dlg.exec() if PYQT6 else dlg.exec_()
 
@@ -2302,7 +2723,7 @@ class FuriganaAction(InterfaceAction):
         ver = '.'.join(str(x) for x in FuriganaPluginBase.version)
 
         html = (
-            f'<h3>振り仮名 Ruby Plugin <span style="font-size:small;color:grey;">v{ver}</span></h3>'
+            f'<h3>振り仮名 Ruby & More Plugin <span style="font-size:small;color:grey;">v{ver}</span></h3>'
             '<p>A Calibre plugin for East Asian ebooks. Select one or more books, '
             'click the <b>振り仮名</b> toolbar button, and choose a command.</p>'
             '<hr/>'
@@ -2335,7 +2756,7 @@ class FuriganaAction(InterfaceAction):
         )
 
         dlg = QDialog(self.gui)
-        dlg.setWindowTitle('振り仮名 Ruby Plugin')
+        dlg.setWindowTitle('振り仮名 Ruby & More Plugin')
         dlg.setMinimumWidth(420)
         dlg.resize(460, 340)
 
