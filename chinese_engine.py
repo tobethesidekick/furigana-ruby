@@ -25,22 +25,24 @@ import shutil
 # Each entry: (opencc_variant, display_label, direction, description)
 # direction: 's2t' = Simplified→Traditional, 't2s' = Traditional→Simplified
 VARIANTS = [
+    # Simplified → Traditional
     ('s2t',   'Generic Traditional (s2t)',
-              's2t', 'Basic character-by-character S→T mapping. Fastest; covers mainland, Taiwan, and HK equally.'),
-    ('s2tw',  'Taiwan Traditional (s2tw)',
-              's2t', 'Taiwan standard character set (正體). Best choice for Taiwan ebooks. Recommended.'),
-    ('s2twp', 'Taiwan Traditional — phrases (s2twp)',
-              's2t', 'Taiwan standard + phrase-level vocabulary conversion (e.g. 軟件→軟體). Slower but more accurate.'),
-    ('s2hk',  'Hong Kong Traditional (s2hk)',
+              's2t', 'Basic S→T mapping. Works for any simplified source. Fastest option.'),
+    ('s2tw',  'Taiwan Traditional 正體 (s2tw)',
+              's2t', 'Taiwan standard character set (正體). Recommended for Taiwan-published ebooks.'),
+    ('s2twp', 'Taiwan Traditional 正體 — phrases (s2twp)',
+              's2t', 'Taiwan Traditional + phrase-level vocabulary (e.g. 軟件→軟體). More accurate, slower.'),
+    ('s2hk',  'Hong Kong Traditional 港式 (s2hk)',
               's2t', 'Hong Kong standard character set (港式繁體). Use for HK-published ebooks.'),
+    # Traditional → Simplified (all produce Mainland China GB Simplified)
     ('t2s',   'Generic Simplified (t2s)',
-              't2s', 'Basic character-by-character T→S mapping. Fastest general-purpose option.'),
-    ('tw2s',  'Simplified from Taiwan (tw2s)',
-              't2s', 'Converts Taiwan Traditional characters to Simplified. Good for Taiwan-sourced ebooks.'),
-    ('tw2sp', 'Simplified from Taiwan — phrases (tw2sp)',
-              't2s', 'Taiwan Traditional→Simplified + phrase-level vocabulary. Slower but more accurate.'),
-    ('hk2s',  'Simplified from Hong Kong (hk2s)',
-              't2s', 'Converts Hong Kong Traditional characters to Simplified.'),
+              't2s', 'Basic T→S mapping. Works for any traditional source. Fastest option.'),
+    ('tw2s',  'Taiwan Traditional → Simplified (tw2s)',
+              't2s', 'Source is Taiwan Traditional (正體). Output is Mainland Simplified.'),
+    ('tw2sp', 'Taiwan Traditional → Simplified — phrases (tw2sp)',
+              't2s', 'Taiwan Traditional → Simplified + phrase-level vocabulary. More accurate, slower.'),
+    ('hk2s',  'Hong Kong Traditional → Simplified (hk2s)',
+              't2s', 'Source is Hong Kong Traditional (港式). Output is Mainland Simplified.'),
 ]
 
 VARIANTS_S2T = [v for v in VARIANTS if v[2] == 's2t']
