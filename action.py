@@ -34,6 +34,17 @@ except ImportError:
 
 from calibre.gui2.actions import InterfaceAction
 from calibre.gui2 import error_dialog, info_dialog, warning_dialog
+from calibre.utils.config import JSONConfig
+
+prefs = JSONConfig('plugins/furigana_ruby')
+prefs.defaults['annotate_levels']        = ['N1', 'N2', 'N3']
+prefs.defaults['keep_original']          = False
+prefs.defaults['auto_chinese_enabled']   = False
+prefs.defaults['auto_chinese_direction'] = 's2t'
+prefs.defaults['s2t_variant']            = 's2twp'
+prefs.defaults['t2s_variant']            = 't2s'
+prefs.defaults['auto_ruby_enabled']      = False
+prefs.defaults['auto_ruby_levels']       = ['N1', 'N2', 'N3']
 
 _ALL_LEVELS = {'N1', 'N2', 'N3', 'N4', 'N5', 'unlisted'}
 
@@ -469,10 +480,7 @@ class FuriganaAction(InterfaceAction):
                 if db.has_format(book_id, 'EPUB') else None)
 
     def _default_levels(self):
-        from calibre.utils.config import JSONConfig
-        p = JSONConfig('plugins/furigana_ruby')
-        p.defaults['annotate_levels'] = ['N1', 'N2', 'N3']
-        return set(p.get('annotate_levels', ['N1', 'N2', 'N3']))
+        return set(prefs.get('annotate_levels', ['N1', 'N2', 'N3']))
 
     def _ensure_deps(self):
         from calibre_plugins.furigana_ruby.deps_loader import ensure_deps, get_status
@@ -774,6 +782,13 @@ class FuriganaAction(InterfaceAction):
             return f'⚠ Error:\n{err[0]}'
 
         try:
+            if mode == 'add' and prefs['keep_original']:
+                try:
+                    existing = db.formats(book_id)
+                    if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
+                        db.add_format(book_id, 'ORIGINAL_EPUB', epub_path, replace=False)
+                except Exception:
+                    pass
             db.add_format(book_id, 'EPUB', tmp, replace=True)
         except Exception as e:
             try: os.unlink(tmp)
@@ -989,8 +1004,15 @@ class FuriganaAction(InterfaceAction):
                 return
 
             try:
-                self.gui.current_db.new_api.add_format(
-                    book_id, 'EPUB', tmp, replace=True)
+                _db = self.gui.current_db.new_api
+                if prefs['keep_original']:
+                    try:
+                        existing = _db.formats(book_id)
+                        if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
+                            _db.add_format(book_id, 'ORIGINAL_EPUB', path, replace=False)
+                    except Exception:
+                        pass
+                _db.add_format(book_id, 'EPUB', tmp, replace=True)
             except Exception as e:
                 try:
                     os.unlink(tmp)
@@ -1440,6 +1462,15 @@ class FuriganaAction(InterfaceAction):
                         lbl.setStyleSheet('color: red;')
                     continue
                 try:
+                    if prefs['keep_original']:
+                        orig = next((r['epub'] for r in book_rows if r['book_id'] == book_id), None)
+                        if orig:
+                            try:
+                                existing = db.formats(book_id)
+                                if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
+                                    db.add_format(book_id, 'ORIGINAL_EPUB', orig, replace=False)
+                            except Exception:
+                                pass
                     db.add_format(book_id, 'EPUB', tmp_path, replace=True)
                     saved += 1
                 except Exception as e:
@@ -1513,11 +1544,6 @@ class FuriganaAction(InterfaceAction):
             from lang_detect import (detect_book_language, lang_display,
                                      detect_script_from_epub, detect_script_from_text)
             from chinese_engine import VARIANTS_S2T, VARIANTS_T2S
-
-        from calibre.utils.config import JSONConfig
-        prefs = JSONConfig('plugins/furigana_ruby')
-        prefs.defaults['s2t_variant'] = 's2tw'
-        prefs.defaults['t2s_variant'] = 't2s'
 
         db = self.gui.current_db.new_api
 
@@ -2128,6 +2154,19 @@ class FuriganaAction(InterfaceAction):
                         lbl.setStyleSheet('color: red;')
                     continue
                 try:
+                    if prefs['keep_original']:
+                        orig = next(
+                            (t.get(fmt.lower()) for t in tasks if t['book_id'] == book_id),
+                            None,
+                        )
+                        if orig:
+                            orig_fmt = f'ORIGINAL_{fmt}'
+                            try:
+                                existing = db.formats(book_id)
+                                if orig_fmt.upper() not in (f.upper() for f in existing):
+                                    db.add_format(book_id, orig_fmt, orig, replace=False)
+                            except Exception:
+                                pass
                     db.add_format(book_id, fmt, tmp_path, replace=True)
                     saved += 1
                 except Exception as e:
