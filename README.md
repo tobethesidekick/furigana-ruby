@@ -11,7 +11,7 @@ A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one 
 ### 振り仮名 — Edit Ruby (Japanese EPUBs)
 - **Auto-generates furigana** above kanji using [pykakasi](https://github.com/miurahr/pykakasi)
 - **Preserves publisher ruby** — hand-verified readings are never overwritten
-- **JLPT-level filtering** — annotate only the difficulty levels you want (N5–N1)
+- **JLPT-level filtering** — annotate only the difficulty levels you want (N5–N1 + Unlisted)
 - **Selective add/remove** — update individual levels without reprocessing the whole book
 - **Viewer toggle** — switch between *all ruby*, *publisher only*, and *hidden* while reading
 - Works in the **Calibre desktop viewer** and **Calibre browser content server** (Chrome, Firefox, Safari, mobile)
@@ -125,6 +125,28 @@ The toggle works identically in any browser — open Calibre's content server at
 ---
 
 ## Changelog
+
+### v1.4.0
+**New: Preferences panel — Auto Import & keep original**
+
+Settings are now configured inside Calibre via **Preferences → Plugins → FuriganaRuby → Customize plugin**, so there is no need to edit config files manually.
+
+**When Modifying Books**
+- New **Keep original as ORIGINAL\_EPUB** option: before any modification (ruby annotation, Chinese S↔T conversion, layout conversion), the unmodified file is saved as the `ORIGINAL_EPUB` format in your Calibre library — visible in the book's format list and deletable individually
+- Applies to all manual single-book operations that change the EPUB
+
+**Auto Import** (requires [calibre-monitor](https://github.com/tobethesidekick/calibre-monitor) background script)
+- **Watch folders** — view and edit the folders the background monitor watches, without leaving Calibre
+- **Auto Chinese conversion** — enable Simplified ↔ Traditional conversion on import; choose direction (S→T or T→S) and variant; syncs to `monitor_config.json` automatically on OK
+- **Auto add ruby** — enable furigana annotation on import for Japanese EPUBs; choose which JLPT levels (N1–N5 + Unlisted); syncs to `monitor_config.json` automatically on OK
+- Monitor status is shown at the top of the panel (running / not running)
+- "Show Instruction" button explains how to set up the monitor script
+
+**Bug fixes**
+- Settings dialog now reads the plugin JSON file directly (bypasses a Calibre JSONConfig caching issue that caused `keep_original` and `auto_ruby_enabled` to display with incorrect initial values)
+- `prefs['key']` (bracket access) is now used throughout `action.py` instead of `prefs.get('key', default)` to ensure Calibre's on-disk refresh is always triggered
+
+---
 
 ### v1.3.1
 **Bug fixes**
