@@ -2753,6 +2753,18 @@ class FuriganaAction(InterfaceAction):
             'Switches the text direction between horizontal (左&rarr;右) and vertical (縦書き). '
             'Updates CSS writing-mode, OPF page-progression-direction, '
             'and repositions the ruby toggle button to match.</p>'
+            '<hr/>'
+
+            '<p><b>&#128269; &mdash; Auto-Import Watch Folders</b>'
+            '&nbsp;&nbsp;<span style="color:#545454;font-size:small;">companion script &middot; macOS</span></p>'
+            '<p style="margin:0 0 0 12px;color:#333;">'
+            'The <a href="https://github.com/tobethesidekick/calibre-monitor">Calibre Monitor</a> '
+            'companion script watches folders for new ebook files and imports them automatically, '
+            'applying Chinese conversion and furigana annotation on the way in. '
+            'Because it runs as a macOS background service (LaunchAgent), it works '
+            '<b>even while Calibre is closed</b> &mdash; ideal for iCloud Drive folders '
+            'shared across devices. Settings are configured in this plugin\'s Preferences panel '
+            'and read by the monitor at startup.</p>'
         )
 
         dlg = QDialog(self.gui)
