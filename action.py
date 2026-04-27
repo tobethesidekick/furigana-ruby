@@ -1278,215 +1278,18 @@ class FuriganaAction(InterfaceAction):
             warning_dialog(self.gui, 'No Book Selected',
                 'Select one or more EPUB books first.', show=True)
             return
-        if len(ids) == 1:
-            self._show_orientation_dialog(ids[0])
-        else:
-            self._show_bulk_orientation_dialog(ids)
+        self._show_orientation_dialog(ids)
 
-    def _show_orientation_dialog(self, book_id):
-        path = self._epub_path(book_id)
-        if not path:
-            warning_dialog(self.gui, 'No EPUB',
-                'No EPUB format found for this book.', show=True)
-            return
-
+    def _show_orientation_dialog(self, book_ids):
         try:
             from calibre_plugins.furigana_ruby.orientation_engine import detect_orientation
         except ImportError:
             from orientation_engine import detect_orientation
-
-        db      = self.gui.current_db.new_api
-        title   = db.field_for('title', book_id) or f'Book {book_id}'
-        current = detect_orientation(path)   # 'vertical' | 'horizontal' | 'unknown'
-        target  = 'horizontal' if current == 'vertical' else 'vertical'
-
-        # ── Dialog ────────────────────────────────────────────────
-        dlg = QDialog(self.gui)
-        dlg.setWindowTitle('Convert Layout')
-        dlg.setMinimumWidth(560)
-        dlg.setMinimumHeight(320)
-        dlg.resize(580, 340)
-
-        vl = QVBoxLayout()
-        vl.setSpacing(12)
-        dlg.setLayout(vl)
-
-        te = QTextEdit()
-        te.setReadOnly(True)
-        sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
-        te.setSizePolicy(sp.Expanding, sp.Expanding)
-        vl.addWidget(te)
-
-        if current == 'vertical':
-            status_text = (
-                f'📖  "{title}"\n\n'
-                f'Current layout:   Vertical (right-to-left columns)\n\n'
-                f'Clicking Convert will:\n'
-                f'  • Change writing-mode to horizontal in all CSS files\n'
-                f'  • Update the OPF spine direction to left-to-right\n'
-                f'  • Fix any inline vertical styles in the HTML\n\n'
-                f'Publisher and auto ruby annotations are preserved.'
-            )
-            btn_label = '↔  Convert to Horizontal'
-        elif current == 'horizontal':
-            status_text = (
-                f'📖  "{title}"\n\n'
-                f'Current layout:   Horizontal (left-to-right)\n\n'
-                f'Clicking Convert will:\n'
-                f'  • Add writing-mode: vertical-rl to all CSS files\n'
-                f'  • Update the OPF spine direction to right-to-left\n'
-                f'  • Fix any inline horizontal styles in the HTML\n\n'
-                f'Publisher and auto ruby annotations are preserved.'
-            )
-            btn_label = '↔  Convert to Vertical'
-        else:
-            status_text = (
-                f'📖  "{title}"\n\n'
-                f'Current layout:   Unknown\n\n'
-                f'The orientation could not be detected from the OPF or CSS.\n'
-                f'You can still attempt a conversion — choose a target below.'
-            )
-            btn_label = '↔  Convert to Vertical'
-
-        te.setPlainText(status_text)
-
-        # ── Button row ────────────────────────────────────────────
-        btn_row     = QHBoxLayout()
-        btn_convert = QPushButton(btn_label)
-        btn_viewer  = QPushButton('📖 Open in Viewer')
-        btn_close   = QPushButton('Close')
-        btn_convert.setMinimumWidth(200)
-        btn_viewer.setMinimumWidth(130)
-        btn_close.setMinimumWidth(70)
-        btn_row.addWidget(btn_convert)
-        btn_row.addStretch()
-        btn_row.addWidget(btn_viewer)
-        btn_row.addWidget(btn_close)
-        vl.addLayout(btn_row)
-
-        # ── Convert handler ───────────────────────────────────────
-        def on_convert():
-            btn_convert.setEnabled(False)
-
-            try:
-                wm = Qt.WindowModality.WindowModal
-            except AttributeError:
-                wm = Qt.WindowModal
-
-            tmp = tempfile.mktemp(suffix='.epub')
-            prog = QProgressDialog(
-                f'Converting: {title}', 'Cancel', 0, 100, self.gui)
-            prog.setWindowTitle(
-                'Converting to Horizontal…' if target == 'horizontal'
-                else 'Converting to Vertical…')
-            prog.setWindowModality(wm)
-            prog.setMinimumDuration(0)
-            prog.setMinimumWidth(460)
-            prog.setValue(0)
-            prog.show()
-            prog.raise_()
-            prog.activateWindow()
-            QApplication.processEvents()   # paint before heavy work starts
-
-            done = [False]
-            result = [None]
-
-            worker = OrientationWorker(path, tmp, target)
-
-            def on_prog(c, t, n):
-                if not prog.wasCanceled():
-                    prog.setValue(int(c / max(t, 1) * 100))
-                    prog.setLabelText(f'Processing: {n}')
-
-            def on_done(ok, css_n, html_n, opf_ok, errs, tb):
-                done[0]   = True
-                result[0] = (ok, css_n, html_n, opf_ok, errs, tb)
-
-            worker.progress.connect(on_prog)
-            worker.finished.connect(on_done)
-            worker.start()
-
-            while not done[0]:
-                QApplication.processEvents()
-                if prog.wasCanceled():
-                    worker.terminate()
-                    worker.wait()
-                    try:
-                        os.unlink(tmp)
-                    except Exception:
-                        pass
-                    prog.close()
-                    btn_convert.setEnabled(True)
-                    te.setPlainText('⚠ Cancelled.')
-                    return
-
-            worker.wait()
-            prog.close()
-
-            ok, css_n, html_n, opf_ok, errs, tb = result[0]
-
-            if not ok:
-                te.setPlainText(f'⚠ Conversion failed:\n\n{tb}')
-                btn_convert.setEnabled(True)
-                return
-
-            try:
-                _db = self.gui.current_db.new_api
-                if prefs['keep_original']:
-                    try:
-                        existing = _db.formats(book_id)
-                        if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
-                            _db.add_format(book_id, 'ORIGINAL_EPUB', path, replace=False)
-                    except Exception:
-                        pass
-                _db.add_format(book_id, 'EPUB', tmp, replace=True)
-            except Exception as e:
-                try:
-                    os.unlink(tmp)
-                except Exception:
-                    pass
-                te.setPlainText(f'⚠ Could not save EPUB: {e}')
-                btn_convert.setEnabled(True)
-                return
-            finally:
-                try:
-                    os.unlink(tmp)
-                except Exception:
-                    pass
-
-            self.gui.library_view.model().refresh_ids([book_id])
-
-            direction_label = ('Horizontal' if target == 'horizontal'
-                               else 'Vertical')
-            msg = (
-                f'✅  Converted to {direction_label} — "{title}"\n\n'
-                f'  CSS files modified:         {css_n}\n'
-                f'  HTML files (inline styles): {html_n}\n'
-                f'  OPF spine updated:          {"Yes" if opf_ok else "No change needed"}\n'
-            )
-            if errs:
-                msg += f'\n⚠ {len(errs)} file(s) had errors (skipped).'
-            te.setPlainText(msg)
-            # Disable convert button — book is already converted
-            btn_convert.setEnabled(False)
-
-        def on_viewer():
-            dlg.reject()
-            self._open_in_viewer(book_id)
-
-        btn_convert.clicked.connect(on_convert)
-        btn_viewer.clicked.connect(on_viewer)
-        btn_close.clicked.connect(dlg.reject)
-
-        dlg.exec() if PYQT6 else dlg.exec_()
-
-    # ── Bulk orientation conversion ───────────────────────────────
-
-    def _show_bulk_orientation_dialog(self, book_ids):
         try:
-            from calibre_plugins.furigana_ruby.orientation_engine import detect_orientation
+            from calibre_plugins.furigana_ruby.lang_detect import (
+                detect_book_language, lang_display)
         except ImportError:
-            from orientation_engine import detect_orientation
+            from lang_detect import detect_book_language, lang_display
 
         db = self.gui.current_db.new_api
 
@@ -1505,8 +1308,14 @@ class FuriganaAction(InterfaceAction):
                 orientation = detect_orientation(epub_path)
             except Exception:
                 orientation = 'unknown'
+            try:
+                lang_info  = detect_book_language(epub_path)
+                lang_label = lang_display(lang_info) if lang_info['lang_raw'] else ''
+            except Exception:
+                lang_label = ''
             book_rows.append({'book_id': book_id, 'title': title,
-                              'epub': epub_path, 'orientation': orientation})
+                              'epub': epub_path, 'orientation': orientation,
+                              'lang_label': lang_label})
 
         def _orient_label(o):
             return {'vertical': 'Vertical', 'horizontal': 'Horizontal'}.get(o, 'Unknown')
@@ -1517,9 +1326,12 @@ class FuriganaAction(InterfaceAction):
                 parts.append(f'{excluded_count} skipped (no EPUB)')
             return f'Selection: {len(book_ids)} book(s) — {" · ".join(parts)}'
 
+        # Smart default direction for single-book selection
+        _single_orientation = book_rows[0]['orientation'] if len(book_rows) == 1 else None
+
         # ── Build dialog ──────────────────────────────────────────
         dlg = QDialog(self.gui)
-        dlg.setWindowTitle('Convert Layout — Bulk')
+        dlg.setWindowTitle('Convert Layout')
         dlg.setMinimumWidth(680)
         dlg.resize(700, 520)
 
@@ -1527,12 +1339,15 @@ class FuriganaAction(InterfaceAction):
         vl.setSpacing(8)
         dlg.setLayout(vl)
 
-        # Direction
+        # Direction — pre-select based on single book's orientation if applicable
         dir_row = QHBoxLayout()
         dir_row.addWidget(QLabel('<b>Direction:</b>'))
         rb_h2v = QRadioButton('Horizontal → Vertical')
         rb_v2h = QRadioButton('Vertical → Horizontal')
-        rb_h2v.setChecked(True)
+        if _single_orientation == 'vertical':
+            rb_v2h.setChecked(True)
+        else:
+            rb_h2v.setChecked(True)
         dir_row.addWidget(rb_h2v)
         dir_row.addWidget(rb_v2h)
         dir_row.addStretch()
@@ -1635,7 +1450,7 @@ class FuriganaAction(InterfaceAction):
                 status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             status_lbl.setMinimumWidth(170)
 
-            _base = _orient_label(row['orientation'])
+            _base = ' · '.join(filter(None, [row['lang_label'], 'EPUB', _orient_label(row['orientation'])]))
             sub_lbl = QLabel(_base)
             sub_lbl.setStyleSheet(_SUB_STYLE)
 
@@ -1676,24 +1491,25 @@ class FuriganaAction(InterfaceAction):
         sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setFixedHeight(80)
+        result_te.setFixedHeight(70)
         result_te.setSizePolicy(sp2.Expanding, sp2.Fixed)
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
-        # Buttons
-        try:
-            std   = QDialogButtonBox.StandardButton
-            bb    = QDialogButtonBox(std.Ok | std.Close)
-        except AttributeError:
-            bb    = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Close)
-        ok_btn = bb.button(
-            QDialogButtonBox.StandardButton.Ok if PYQT6 else QDialogButtonBox.Ok)
-        if ok_btn:
-            ok_btn.setText('Apply')
-        bb.accepted.connect(lambda: _on_apply())
-        bb.rejected.connect(dlg.reject)
-        vl.addWidget(bb)
+        # Buttons — [📖 Open in Viewer] — stretch — [Close] [Convert]
+        btn_row_hl = QHBoxLayout()
+        btn_viewer = QPushButton('📖 Open in Viewer')
+        btn_viewer.setMinimumWidth(150)
+        btn_viewer.setVisible(len(book_rows) == 1)
+        ok_btn = QPushButton('Convert')
+        ok_btn.setMinimumWidth(90)
+        btn_close = QPushButton('Close')
+        btn_close.setMinimumWidth(70)
+        btn_row_hl.addWidget(btn_viewer)
+        btn_row_hl.addStretch()
+        btn_row_hl.addWidget(btn_close)
+        btn_row_hl.addWidget(ok_btn)
+        vl.addLayout(btn_row_hl)
 
         # ── Logic helpers ─────────────────────────────────────────
 
@@ -1714,11 +1530,10 @@ class FuriganaAction(InterfaceAction):
                 cb.isChecked()
                 for cb, row in zip(checkboxes, book_rows)
                 if row['book_id'] in applicable_ids)
-            if ok_btn:
-                ok_btn.setEnabled(any_checked)
-                ok_btn.setToolTip(
-                    '' if any_checked else
-                    'No books selected. Books already in the target layout are disabled.')
+            ok_btn.setEnabled(any_checked)
+            ok_btn.setToolTip(
+                '' if any_checked else
+                'No books selected. Books already in the target layout are disabled.')
             _update_header_cb()
 
         def _update_header_cb():
@@ -1825,8 +1640,7 @@ class FuriganaAction(InterfaceAction):
             direction = 'H→V' if going_h2v else 'V→H'
 
             _lock_controls()
-            if ok_btn:
-                ok_btn.setEnabled(False)
+            ok_btn.setEnabled(False)
             QApplication.processEvents()
 
             for row in tasks:
@@ -1918,7 +1732,7 @@ class FuriganaAction(InterfaceAction):
             for row in book_rows:
                 if row['book_id'] in converted_ids:
                     row['orientation'] = target
-                    new_label = _orient_label(target)
+                    new_label = ' · '.join(filter(None, [row['lang_label'], 'EPUB', _orient_label(target)]))
                     sub_base_text[row['book_id']] = new_label
                     sub_labels[row['book_id']].setText(new_label)
 
@@ -1939,12 +1753,15 @@ class FuriganaAction(InterfaceAction):
         for cb in checkboxes:
             cb.stateChanged.connect(lambda _: _update_apply_state())
         header_cb.clicked.connect(_on_header_clicked)
+        ok_btn.clicked.connect(_on_apply)
+        btn_close.clicked.connect(dlg.reject)
+        btn_viewer.clicked.connect(
+            lambda: (dlg.reject(), self._open_in_viewer(book_rows[0]['book_id'])))
 
         if not book_rows:
             _lock_controls()
-            if ok_btn:
-                ok_btn.setEnabled(False)
-                ok_btn.setToolTip('No EPUB books in selection.')
+            ok_btn.setEnabled(False)
+            ok_btn.setToolTip('No EPUB books in selection.')
 
         _refresh_checks()
 
@@ -2291,22 +2108,23 @@ class FuriganaAction(InterfaceAction):
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
-        # Buttons
-        try:
-            std = QDialogButtonBox.StandardButton
-            bb  = QDialogButtonBox(std.Ok | std.Close)
-        except AttributeError:
-            bb  = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Close)
-        ok_btn = bb.button(
-            QDialogButtonBox.StandardButton.Ok if PYQT6 else QDialogButtonBox.Ok)
-        if ok_btn:
-            ok_btn.setText('Apply')
-        close_btn = bb.button(
-            QDialogButtonBox.StandardButton.Close if PYQT6
-            else QDialogButtonBox.Close)
-        bb.accepted.connect(lambda: _on_apply())
-        bb.rejected.connect(dlg.reject)
-        vl.addWidget(bb)
+        # Buttons — [📖 Open in Viewer] — stretch — [Close] [Apply]
+        btn_row_hl = QHBoxLayout()
+
+        btn_viewer_ch = QPushButton('📖 Open in Viewer')
+        btn_viewer_ch.setMinimumWidth(150)
+        btn_viewer_ch.setVisible(len(book_rows) == 1)
+
+        ok_btn    = QPushButton('Apply')
+        ok_btn.setMinimumWidth(90)
+        close_btn = QPushButton('Close')
+        close_btn.setMinimumWidth(70)
+
+        btn_row_hl.addWidget(btn_viewer_ch)
+        btn_row_hl.addStretch()
+        btn_row_hl.addWidget(close_btn)
+        btn_row_hl.addWidget(ok_btn)
+        vl.addLayout(btn_row_hl)
 
         # ── Logic helpers ─────────────────────────────────────────
 
@@ -2332,14 +2150,13 @@ class FuriganaAction(InterfaceAction):
                 cb.isChecked()
                 for cb, row in zip(checkboxes, book_rows)
                 if row['book_id'] in applicable_ids)
-            if ok_btn:
-                ok_btn.setEnabled(any_checked)
-                if not any_checked:
-                    ok_btn.setToolTip(
-                        'No books are selected. Books already in the target '
-                        'variant are disabled.')
-                else:
-                    ok_btn.setToolTip('')
+            ok_btn.setEnabled(any_checked)
+            if not any_checked:
+                ok_btn.setToolTip(
+                    'No books are selected. Books already in the target '
+                    'variant are disabled.')
+            else:
+                ok_btn.setToolTip('')
             _update_header_cb()
 
         def _already_status(lang_info, going_s2t):
@@ -2494,6 +2311,10 @@ class FuriganaAction(InterfaceAction):
         for cb in checkboxes:
             cb.stateChanged.connect(lambda _: _update_apply_state())
         header_cb.clicked.connect(_on_header_clicked)
+        ok_btn.clicked.connect(lambda: _on_apply())
+        close_btn.clicked.connect(dlg.reject)
+        btn_viewer_ch.clicked.connect(
+            lambda: (dlg.reject(), self._open_in_viewer(book_rows[0]['book_id'])))
 
         # Initial populate
         _refresh_variants()
@@ -2501,9 +2322,8 @@ class FuriganaAction(InterfaceAction):
         if summary_only:
             # No Chinese books — disable everything except Close
             _lock_controls()
-            if ok_btn:
-                ok_btn.setEnabled(False)
-                ok_btn.setToolTip('No Chinese books in selection.')
+            ok_btn.setEnabled(False)
+            ok_btn.setToolTip('No Chinese books in selection.')
 
         # ── Apply handler ─────────────────────────────────────────
 
@@ -2520,8 +2340,7 @@ class FuriganaAction(InterfaceAction):
                 return
 
             _lock_controls()
-            if ok_btn:
-                ok_btn.setEnabled(False)
+            ok_btn.setEnabled(False)
             result_te.setVisible(False)
             QApplication.processEvents()
 
