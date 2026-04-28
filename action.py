@@ -1084,10 +1084,12 @@ class FuriganaAction(InterfaceAction):
                     continue
                 try:
                     if prefs['keep_original']:
-                        existing = db.formats(book_id)
-                        if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
+                        if not db.has_format(book_id, 'ORIGINAL_EPUB'):
                             orig = task_map[book_id]['epub']
-                            db.add_format(book_id, 'ORIGINAL_EPUB', orig, replace=False)
+                            with open(orig, 'rb') as _f:
+                                self.gui.current_db.add_format(
+                                    book_id, 'ORIGINAL_EPUB', _f,
+                                    index_is_id=True, notify=False, replace=False)
                     db.add_format(book_id, 'EPUB', tmp_path, replace=True)
                     saved += 1
                     # Update in-memory state so re-apply works correctly
@@ -1213,12 +1215,11 @@ class FuriganaAction(InterfaceAction):
 
         try:
             if mode == 'add' and prefs['keep_original']:
-                try:
-                    existing = db.formats(book_id)
-                    if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
-                        db.add_format(book_id, 'ORIGINAL_EPUB', epub_path, replace=False)
-                except Exception:
-                    pass
+                if not db.has_format(book_id, 'ORIGINAL_EPUB'):
+                    with open(epub_path, 'rb') as _f:
+                        self.gui.current_db.add_format(
+                            book_id, 'ORIGINAL_EPUB', _f,
+                            index_is_id=True, notify=False, replace=False)
             db.add_format(book_id, 'EPUB', tmp, replace=True)
         except Exception as e:
             try: os.unlink(tmp)
@@ -1708,13 +1709,11 @@ class FuriganaAction(InterfaceAction):
                 try:
                     if prefs['keep_original']:
                         orig = next((r['epub'] for r in book_rows if r['book_id'] == book_id), None)
-                        if orig:
-                            try:
-                                existing = db.formats(book_id)
-                                if 'ORIGINAL_EPUB' not in (f.upper() for f in existing):
-                                    db.add_format(book_id, 'ORIGINAL_EPUB', orig, replace=False)
-                            except Exception:
-                                pass
+                        if orig and not db.has_format(book_id, 'ORIGINAL_EPUB'):
+                            with open(orig, 'rb') as _f:
+                                self.gui.current_db.add_format(
+                                    book_id, 'ORIGINAL_EPUB', _f,
+                                    index_is_id=True, notify=False, replace=False)
                     db.add_format(book_id, 'EPUB', tmp_path, replace=True)
                     saved += 1
                 except Exception as e:
@@ -2426,12 +2425,11 @@ class FuriganaAction(InterfaceAction):
                         )
                         if orig:
                             orig_fmt = f'ORIGINAL_{fmt}'
-                            try:
-                                existing = db.formats(book_id)
-                                if orig_fmt.upper() not in (f.upper() for f in existing):
-                                    db.add_format(book_id, orig_fmt, orig, replace=False)
-                            except Exception:
-                                pass
+                            if not db.has_format(book_id, orig_fmt):
+                                with open(orig, 'rb') as _f:
+                                    self.gui.current_db.add_format(
+                                        book_id, orig_fmt, _f,
+                                        index_is_id=True, notify=False, replace=False)
                     db.add_format(book_id, fmt, tmp_path, replace=True)
                     saved += 1
                 except Exception as e:
