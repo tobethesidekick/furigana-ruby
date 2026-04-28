@@ -28,6 +28,7 @@ _resources_patched = False
 
 
 def _find_plugin_zip():
+    # 1. Inside Calibre — use calibre's own config_dir
     try:
         from calibre.utils.config import config_dir
         plugins_dir = os.path.join(config_dir, 'plugins')
@@ -37,6 +38,23 @@ def _find_plugin_zip():
                     return os.path.join(plugins_dir, fname)
     except Exception:
         pass
+    # 2. Standalone script — check standard per-platform Calibre locations
+    _candidates = []
+    if sys.platform == 'darwin':
+        _candidates.append(os.path.expanduser(
+            '~/Library/Preferences/calibre/plugins'))
+    elif sys.platform.startswith('linux'):
+        _candidates.append(os.path.expanduser(
+            '~/.config/calibre/plugins'))
+    else:
+        _candidates.append(os.path.expanduser(
+            '~/AppData/Roaming/calibre/plugins'))
+    for plugins_dir in _candidates:
+        if os.path.isdir(plugins_dir):
+            for fname in sorted(os.listdir(plugins_dir)):
+                if 'furigana' in fname.lower() and fname.endswith('.zip'):
+                    return os.path.join(plugins_dir, fname)
+    # 3. Something on sys.path is the zip directly
     for path in sys.path:
         if isinstance(path, str) and path.endswith('.zip'):
             if 'furigana' in path.lower():
