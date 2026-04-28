@@ -36,6 +36,7 @@ from calibre.gui2 import error_dialog, info_dialog, warning_dialog
 from calibre.utils.config import JSONConfig
 
 prefs = JSONConfig('plugins/furigana_ruby')
+_script_cache = JSONConfig('plugins/furigana_ruby_script')
 prefs.defaults['annotate_levels']        = ['N1', 'N2', 'N3']
 prefs.defaults['keep_original']          = False
 prefs.defaults['auto_chinese_enabled']   = False
@@ -1849,6 +1850,14 @@ class FuriganaAction(InterfaceAction):
                     lang_info['is_simplified'] = True
                 elif script == 'traditional':
                     lang_info['is_traditional'] = True
+                else:
+                    # Content detection ambiguous — check the local script cache
+                    # (written after each S↔T conversion)
+                    cached = _script_cache.get(str(book_id), '')
+                    if 'hant' in cached.lower():
+                        lang_info['is_traditional'] = True
+                    elif 'hans' in cached.lower():
+                        lang_info['is_simplified'] = True
 
             # Japanese and Korean: excluded from the list but counted for the summary
             if lang_info['is_japanese']:
@@ -2492,6 +2501,7 @@ class FuriganaAction(InterfaceAction):
             # _restore_cb_enabled (called by _unlock_controls) correctly
             # disables them for the same direction on the next Apply.
             converted_ids = {r[0] for r in results if not r[3]}
+            lang_code = 'zh-Hant' if going_s2t else 'zh-Hans'
             for row in book_rows:
                 if row['book_id'] in converted_ids:
                     if going_s2t:
@@ -2500,6 +2510,7 @@ class FuriganaAction(InterfaceAction):
                     else:
                         row['lang_info']['is_traditional'] = False
                         row['lang_info']['is_simplified'] = True
+                    _script_cache[str(row['book_id'])] = lang_code
                     # Rebuild sub_base_text and update widget directly
                     new_lang = _script_label(row['lang_info'])
                     fmts = '  '.join(f for f, p in [
