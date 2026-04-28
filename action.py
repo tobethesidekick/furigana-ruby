@@ -90,10 +90,11 @@ class ChineseWorker(QThread):
     book_finished = pyqtSignal(int, bool, str)  # book_id, all_ok, summary_msg
     finished      = pyqtSignal(bool, list, str) # ok, results, traceback
 
-    def __init__(self, tasks, variant):
+    def __init__(self, tasks, variant, target_lang=None):
         super().__init__()
-        self.tasks   = tasks
-        self.variant = variant
+        self.tasks       = tasks
+        self.variant     = variant
+        self.target_lang = target_lang
 
     def run(self):
         try:
@@ -116,7 +117,8 @@ class ChineseWorker(QThread):
                     tmp = tempfile.mktemp(suffix='.epub')
                     try:
                         convert_epub_s2t(task['epub'], tmp,
-                                         variant=self.variant)
+                                         variant=self.variant,
+                                         target_lang=self.target_lang)
                         results.append((task['book_id'], 'EPUB', tmp, None))
                         fmt_results.append(('EPUB', True, ''))
                     except Exception as e:
@@ -2353,7 +2355,8 @@ class FuriganaAction(InterfaceAction):
             done    = [False]
             outcome = [None]
 
-            worker = ChineseWorker(tasks, variant)
+            target_lang = 'zh-Hant' if going_s2t else 'zh-Hans'
+            worker = ChineseWorker(tasks, variant, target_lang=target_lang)
 
             def on_book_started(book_id):
                 lbl = status_labels.get(book_id)

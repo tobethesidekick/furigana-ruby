@@ -211,7 +211,7 @@ _SKIP_EXTENSIONS    = {'.css', '.js', '.png', '.jpg', '.jpeg', '.gif',
 
 
 def convert_epub_s2t(epub_path, output_path, variant='s2tw',
-                     progress_callback=None):
+                     progress_callback=None, target_lang=None):
     """
     Convert Simplified → Traditional Chinese in an EPUB file.
 
@@ -219,9 +219,13 @@ def convert_epub_s2t(epub_path, output_path, variant='s2tw',
     CSS, images, fonts and other binary assets are passed through unchanged.
 
     progress_callback(current, total, filename)
+    target_lang: if set (e.g. 'zh-Hant', 'zh-Hans'), overwrites the
+                 dc:language tag in the OPF so the result is correctly
+                 classified on next open.
 
     Returns (files_converted, errors_list).
     """
+    import re as _re
     converter = _get_converter(variant)
 
     tmp = tempfile.mktemp(suffix='.epub')
@@ -251,6 +255,11 @@ def convert_epub_s2t(epub_path, output_path, variant='s2tw',
                     try:
                         text = data.decode('utf-8')
                         text = _convert_html_text_nodes(text, converter)
+                        if target_lang and ext == '.opf':
+                            text = _re.sub(
+                                r'<dc:language[^>]*>[^<]*</dc:language>',
+                                f'<dc:language>{target_lang}</dc:language>',
+                                text, flags=_re.I)
                         data = text.encode('utf-8')
                         files_converted += 1
                     except Exception as e:
