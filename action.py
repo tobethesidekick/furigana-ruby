@@ -911,8 +911,8 @@ class FuriganaAction(InterfaceAction):
         # Summary result panel
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setFixedHeight(70)
-        result_te.setSizePolicy(sp_pol.Expanding, sp_pol.Fixed)
+        result_te.setMinimumHeight(120)
+        result_te.setSizePolicy(sp_pol.Expanding, sp_pol.Expanding)
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
@@ -1495,8 +1495,8 @@ class FuriganaAction(InterfaceAction):
         sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setFixedHeight(70)
-        result_te.setSizePolicy(sp2.Expanding, sp2.Fixed)
+        result_te.setMinimumHeight(120)
+        result_te.setSizePolicy(sp2.Expanding, sp2.Expanding)
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
@@ -2113,8 +2113,8 @@ class FuriganaAction(InterfaceAction):
         sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setFixedHeight(80)
-        result_te.setSizePolicy(sp2.Expanding, sp2.Fixed)
+        result_te.setMinimumHeight(120)
+        result_te.setSizePolicy(sp2.Expanding, sp2.Expanding)
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
@@ -2564,7 +2564,7 @@ class FuriganaAction(InterfaceAction):
             '<p style="margin:0 0 0 12px;color:#333;">'
             'Adds or removes furigana (reading aids) above kanji, filtered by JLPT level '
             '(N5 &rarr; N1). Publisher-supplied ruby is never overwritten. '
-            'Auto-generated ruby appears in <span style="color:#4a72c4">blue</span>; '
+            'Auto-generated ruby appears in <span style="color:#2b6fd4">blue</span>; '
             'use the in-viewer toggle (&#x1F233; / &#x1F4D6; / &#x1F21A;) to switch between '
             'all, publisher-only, or hidden.</p>'
             '<hr/>'
