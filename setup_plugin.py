@@ -92,8 +92,10 @@ def add_dir_to_zip(zf, src_dir, zip_prefix):
         # Skip __pycache__ to keep zip small (not strictly necessary)
         dirs[:] = [d for d in dirs if d != '__pycache__']
         for fname in files:
-            # Skip .pyc files — Python will recompile from .py as needed
-            if fname.endswith('.pyc'):
+            # Skip compiled bytecode and arch-specific binaries.
+            # Binaries built on Apple Silicon won't load on Intel (and vice versa);
+            # all bundled packages have pure-Python fallbacks.
+            if fname.endswith(('.pyc', '.so', '.dylib', '.pyd')):
                 continue
             fpath = os.path.join(root, fname)
             rel   = os.path.relpath(fpath, src_dir)

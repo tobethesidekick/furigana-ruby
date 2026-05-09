@@ -77,9 +77,9 @@ RUBY_CSS = """<style id="furigana-ruby-css">
 /* Furigana Ruby Plugin */
 
 /* Auto-generated ruby colour only — no layout overrides */
-ruby.auto rt { color: #4a72c4; }
+ruby.auto rt { color: #2b6fd4; }
 @media (prefers-color-scheme: dark) {
-    ruby.auto rt { color: #7fb3f5; }
+    ruby.auto rt { color: #6aaef7; }
 }
 
 /* ── Toggle states ── */

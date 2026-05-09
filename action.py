@@ -18,7 +18,9 @@ try:
                                   QComboBox, QRadioButton, QButtonGroup,
                                   QScrollArea, QWidget, QFrame)
     from PyQt6.QtCore import Qt, QThread, pyqtSignal
-    from PyQt6.QtGui import QIcon, QAction, QPainter
+    from PyQt6.QtGui import (QIcon, QAction, QPainter, QPixmap,
+                              QColor, QFont, QBrush, QPen, QPainterPath)
+    from PyQt6.QtCore import QRect, QRectF
     PYQT6 = True
 except ImportError:
     from PyQt5.Qt import (QMenu, QProgressDialog, QApplication,
@@ -28,7 +30,9 @@ except ImportError:
                            QSizePolicy, QTextEdit, QTextBrowser,
                            QComboBox, QRadioButton, QButtonGroup,
                            QScrollArea, QWidget, QFrame, Qt, QThread,
-                           pyqtSignal, QIcon, QAction, QPainter)
+                           pyqtSignal, QIcon, QAction, QPainter,
+                           QPixmap, QColor, QFont, QBrush,
+                           QPen, QPainterPath, QRect, QRectF)
     PYQT6 = False
 
 from calibre.gui2.actions import InterfaceAction
@@ -38,6 +42,7 @@ from calibre.utils.config import JSONConfig
 prefs = JSONConfig('plugins/furigana_ruby')
 _script_cache = JSONConfig('plugins/furigana_ruby_script')
 prefs.defaults['annotate_levels']        = ['N1', 'N2', 'N3']
+prefs.defaults['tile_action']            = 'ruby'
 prefs.defaults['keep_original']          = False
 prefs.defaults['auto_chinese_enabled']   = False
 prefs.defaults['auto_chinese_direction'] = 's2t'
@@ -378,45 +383,13 @@ class FuriganaAction(InterfaceAction):
                   if PYQT6 else 2)
 
     def genesis(self):
-        # ── Icon ──────────────────────────────────────────────────
-        try:
-            import zipfile as _zf
-            icon_data = None
-            icon_path = os.path.join(os.path.dirname(__file__), 'images', 'icon.png')
-            if os.path.exists(icon_path):
-                with open(icon_path, 'rb') as f:
-                    icon_data = f.read()
-            else:
-                from calibre.utils.config import config_dir
-                pdir = os.path.join(config_dir, 'plugins')
-                if os.path.isdir(pdir):
-                    for fn in os.listdir(pdir):
-                        if 'furigana' in fn.lower() and fn.endswith('.zip'):
-                            with _zf.ZipFile(os.path.join(pdir, fn), 'r') as z:
-                                if 'images/icon.png' in z.namelist():
-                                    icon_data = z.read('images/icon.png')
-                            break
-            if icon_data:
-                try:
-                    from PyQt6.QtGui import QPixmap
-                    from PyQt6.QtCore import QByteArray
-                except ImportError:
-                    from PyQt5.Qt import QPixmap, QByteArray
-                ba = QByteArray(icon_data)
-                pm = QPixmap()
-                pm.loadFromData(ba)
-                if not pm.isNull():
-                    self.qaction.setIcon(QIcon(pm))
-        except Exception:
-            pass
-
         # ── Dropdown menu ──────────────────────────────────────────
         self.menu = QMenu(self.gui)
         self.qaction.setMenu(self.menu)
         self.qaction.triggered.connect(self.open_main_dialog)
 
         a1 = QAction('✦ Edit Ruby…', self.gui)
-        a1.triggered.connect(self.open_main_dialog)
+        a1.triggered.connect(self.open_ruby_dialog)
         self.menu.addAction(a1)
 
         a2 = QAction('↔ Convert Layout…', self.gui)
@@ -442,6 +415,143 @@ class FuriganaAction(InterfaceAction):
         a4 = QAction('🔄 Check for Updates…', self.gui)
         a4.triggered.connect(self.check_for_updates)
         self.menu.addAction(a4)
+
+        self._apply_tile_action()
+
+    # ── Tile icon helpers ─────────────────────────────────────────
+
+    def _make_tile_pixmap(self, lines, font_size=18):
+        """Generate a 64×64 QPixmap: blue rounded rect + white centred text."""
+        size = 64
+        pm = QPixmap(size, size)
+        pm.fill(QColor(0, 0, 0, 0))
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing if PYQT6
+                        else QPainter.Antialiasing)
+        p.setBrush(QBrush(QColor('#2b4ea8')))
+        p.setPen(QColor(0, 0, 0, 0))
+        p.drawRoundedRect(QRectF(1, 1, 62, 62), 9, 9)
+        p.setPen(QColor('#ffffff'))
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(font_size)
+        p.setFont(font)
+        align = (Qt.AlignmentFlag.AlignCenter if PYQT6 else Qt.AlignCenter)
+        line_h = font_size + 4
+        y = (size - len(lines) * line_h) // 2
+        for line in lines:
+            p.drawText(QRect(0, y, size, line_h), align, line)
+            y += line_h
+        p.end()
+        return pm
+
+    def _make_direction_pixmap(self):
+        """Two-document icon (H-lines ↔ V-lines) with curved arrows."""
+        size = 64
+        pm = QPixmap(size, size)
+        pm.fill(QColor(0, 0, 0, 0))
+        p = QPainter(pm)
+        AA = QPainter.RenderHint.Antialiasing if PYQT6 else QPainter.Antialiasing
+        p.setRenderHint(AA)
+
+        # Blue background with 5px border visible on all sides
+        p.setBrush(QBrush(QColor('#2b4ea8')))
+        p.setPen(QColor(0, 0, 0, 0))
+        p.drawRoundedRect(QRectF(1, 1, 62, 62), 9, 9)
+
+        # White document boxes — inset so blue border shows
+        # H-box: (5,5,22,22) → spans to (27,27); V-box: (37,37,22,22) → spans to (59,59)
+        # 5px blue border all edges, 10px gap between boxes for arrows
+        p.setBrush(QBrush(QColor('#ffffff')))
+        p.drawRoundedRect(QRectF(5, 5, 22, 22), 3, 3)   # H-text (top-left)
+        p.drawRoundedRect(QRectF(37, 37, 22, 22), 3, 3)  # V-text (bottom-right)
+
+        # Dark horizontal bars in H-text box; short bar at bottom (LTR last line)
+        bar = QColor('#1a1a1a')
+        p.setBrush(QBrush(bar))
+        p.setPen(QColor(0, 0, 0, 0))
+        for y, w in [(9, 16), (13, 16), (17, 16), (21, 11)]:
+            p.drawRect(QRect(8, y, w, 3))
+
+        # Dark vertical bars in V-text box; short bar on left (RTL last column)
+        for x, h in [(40, 11), (44, 16), (48, 16), (52, 16)]:
+            p.drawRect(QRect(x, 40, 3, h))
+
+        # White curved arrows — short, spanning only the gap between boxes
+        NoBrush = Qt.BrushStyle.NoBrush if PYQT6 else Qt.NoBrush
+        RoundCap = Qt.PenCapStyle.RoundCap if PYQT6 else Qt.RoundCap
+        RoundJoin = Qt.PenJoinStyle.RoundJoin if PYQT6 else Qt.RoundJoin
+        pen = QPen(QColor('#ffffff'))
+        pen.setWidth(3)
+        pen.setCapStyle(RoundCap)
+        pen.setJoinStyle(RoundJoin)
+        p.setPen(pen)
+        p.setBrush(NoBrush)
+
+        # Arrow 1: H-box right edge → V-box top (straight down at end)
+        path1 = QPainterPath()
+        path1.moveTo(28, 11)
+        path1.cubicTo(40, 11, 48, 24, 48, 36)
+        p.drawPath(path1)
+        p.drawLine(48, 36, 52, 32)
+        p.drawLine(48, 36, 44, 32)
+
+        # Arrow 2: V-box left edge → H-box bottom (straight up at end)
+        path2 = QPainterPath()
+        path2.moveTo(36, 53)
+        path2.cubicTo(24, 53, 16, 42, 16, 28)
+        p.drawPath(path2)
+        p.drawLine(16, 28, 12, 32)
+        p.drawLine(16, 28, 20, 32)
+
+        p.end()
+        return pm
+
+    def _apply_tile_action(self, action=None):
+        """Set toolbar icon and label to match tile_action. Pass action directly to bypass pref cache."""
+        if action is None:
+            action = prefs['tile_action']
+        self._tile_action = action
+        if action == 'chinese':
+            pm = self._make_tile_pixmap(['简-繁'], font_size=20)
+            self.qaction.setIcon(QIcon(pm))
+            self.qaction.setText('简-繁')
+        elif action == 'direction':
+            pm = self._make_direction_pixmap()
+            self.qaction.setIcon(QIcon(pm))
+            self.qaction.setText('Text Direction')
+        else:
+            # Load original icon.png for ruby (default)
+            try:
+                import zipfile as _zf
+                icon_data = None
+                icon_path = os.path.join(os.path.dirname(__file__), 'images', 'icon.png')
+                if os.path.exists(icon_path):
+                    with open(icon_path, 'rb') as f:
+                        icon_data = f.read()
+                else:
+                    from calibre.utils.config import config_dir
+                    pdir = os.path.join(config_dir, 'plugins')
+                    if os.path.isdir(pdir):
+                        for fn in os.listdir(pdir):
+                            if 'furigana' in fn.lower() and fn.endswith('.zip'):
+                                with _zf.ZipFile(os.path.join(pdir, fn), 'r') as z:
+                                    if 'images/icon.png' in z.namelist():
+                                        icon_data = z.read('images/icon.png')
+                                break
+                if icon_data:
+                    try:
+                        from PyQt6.QtCore import QByteArray
+                    except ImportError:
+                        from PyQt5.Qt import QByteArray
+                    ba = QByteArray(icon_data)
+                    pm = QPixmap()
+                    pm.loadFromData(ba)
+                    if not pm.isNull():
+                        self.qaction.setIcon(QIcon(pm))
+            except Exception:
+                pass
+            self.qaction.setText('振り仮名 Ruby')
 
     # ── Helpers ───────────────────────────────────────────────────
 
@@ -501,6 +611,20 @@ class FuriganaAction(InterfaceAction):
     # ── Entry point ───────────────────────────────────────────────
 
     def open_main_dialog(self):
+        ids = self._selected_ids()
+        if not ids:
+            warning_dialog(self.gui, 'No Book Selected',
+                'Select one or more books first.', show=True)
+            return
+        action = getattr(self, '_tile_action', prefs['tile_action'])
+        if action == 'chinese':
+            self._show_chinese_dialog(ids)
+        elif action == 'direction':
+            self._show_orientation_dialog(ids)
+        else:
+            self._show_ruby_dialog(ids)
+
+    def open_ruby_dialog(self):
         ids = self._selected_ids()
         if not ids:
             warning_dialog(self.gui, 'No Book Selected',
@@ -1783,11 +1907,13 @@ class FuriganaAction(InterfaceAction):
         try:
             from calibre_plugins.furigana_ruby.lang_detect import (
                 detect_book_language, lang_display,
-                detect_script_from_epub, detect_script_from_text)
+                detect_script_from_epub, detect_script_from_text,
+                detect_script_short)
             from calibre_plugins.furigana_ruby.chinese_engine import VARIANTS_S2T
         except ImportError:
             from lang_detect import (detect_book_language, lang_display,
-                                     detect_script_from_epub, detect_script_from_text)
+                                     detect_script_from_epub, detect_script_from_text,
+                                     detect_script_short)
             from chinese_engine import VARIANTS_S2T
 
         db = self.gui.current_db.new_api
@@ -1797,7 +1923,9 @@ class FuriganaAction(InterfaceAction):
         excluded_counts = {}   # language label → count of books not listed
 
         for book_id in book_ids:
-            title     = db.field_for('title', book_id) or f'Book {book_id}'
+            title      = db.field_for('title', book_id) or f'Book {book_id}'
+            authors    = list(db.field_for('authors', book_id) or [])
+            title_script = detect_script_short(title + ' ' + ' '.join(authors))
             epub_path = (db.format_abspath(book_id, 'EPUB')
                          if db.has_format(book_id, 'EPUB') else None)
             html_path = (db.format_abspath(book_id, 'HTML')
@@ -1866,10 +1994,13 @@ class FuriganaAction(InterfaceAction):
                 excluded_counts['Korean'] = excluded_counts.get('Korean', 0) + 1
                 continue
 
+            author_str = ', '.join(authors) if authors else ''
             book_rows.append({'book_id': book_id, 'title': title,
+                               'author': author_str,
                                'epub': epub_path, 'html': html_path,
                                'fb2': fb2_path,  'txt': txt_path,
-                               'lang_info': lang_info})
+                               'lang_info': lang_info,
+                               'title_script': title_script})
 
         total_selected = len(book_ids)
         n_chinese      = len(book_rows)
@@ -1942,10 +2073,21 @@ class FuriganaAction(InterfaceAction):
         var_desc_lbl.setStyleSheet('color: #545454; font-size: 11px; padding-left: 60px;')
         vl.addWidget(var_desc_lbl)
 
-        # Metadata checkbox
-        meta_cb = QCheckBox('Also update title and author metadata')
-        meta_cb.setChecked(True)
-        vl.addWidget(meta_cb)
+        # Metadata-only mode — bare checkbox + word-wrapping label (QCheckBox has no word wrap)
+        meta_only_cb = QCheckBox()
+        meta_only_cb.setChecked(True)
+        _sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        meta_only_lbl = QLabel(
+            'Skip content re-processing for books already in the target script. '
+            'Only update title and author not yet in the target script.')
+        meta_only_lbl.setWordWrap(True)
+        meta_only_lbl.setSizePolicy(_sp.Expanding, _sp.Preferred)
+        meta_only_row = QHBoxLayout()
+        meta_only_row.setContentsMargins(0, 0, 0, 0)
+        meta_only_row.setSpacing(4)
+        meta_only_row.addWidget(meta_only_cb)
+        meta_only_row.addWidget(meta_only_lbl)
+        vl.addLayout(meta_only_row)
 
         # Book list header — styled like a table header row.
         # Use object-name selector so child widgets don't inherit the border.
@@ -2013,7 +2155,7 @@ class FuriganaAction(InterfaceAction):
         status_labels = {}   # book_id → QLabel
         title_labels  = {}   # book_id → ElidedLabel
         sub_labels    = {}   # book_id → QLabel  (language · formats [· reason])
-        sub_base_text = {}   # book_id → plain "lang  ·  fmts" (no reason suffix)
+        sub_base_text = {}   # book_id → computed sub-label text (title/content/format info)
         cb_map        = {}   # book_id → QCheckBox (for _apply_row_style)
         applicable_ids = set()   # book_ids currently applicable; avoids isVisible quirks
 
@@ -2029,15 +2171,33 @@ class FuriganaAction(InterfaceAction):
                 return 'Chinese (中文)'
             return lang_display(li)
 
-        sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
-
-        for row in book_rows:
+        def _compute_sub_base(row):
+            """Build the sub-label text, always showing content/title scripts for Chinese books."""
             li   = row['lang_info']
             lang = _script_label(li)
             fmts = '  '.join(f for f, p in [('EPUB', row['epub']),
                                               ('HTML', row['html']),
                                               ('FB2',  row['fb2']),
                                               ('TXT',  row['txt'])] if p)
+            ts = row.get('title_script', 'unknown')
+            content_script = ('traditional' if li.get('is_traditional')
+                               else 'simplified' if li.get('is_simplified')
+                               else 'unknown')
+            if content_script != 'unknown':
+                content_label = 'Traditional' if content_script == 'traditional' else 'Simplified'
+                if ts == 'unknown':
+                    return f'Content: {content_label}  ·  {fmts}'
+                ts_label  = 'Traditional' if ts == 'traditional' else 'Simplified'
+                mismatch  = ts != content_script
+                title_part = f'Title: {ts_label}' + (' ⚠' if mismatch else '')
+                return f'{title_part}  ·  Content: {content_label}  ·  {fmts}'
+            return f'{lang}  ·  {fmts}'
+
+        sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
+
+        for row in book_rows:
+            li    = row['lang_info']
+            _base = _compute_sub_base(row)
 
             # ── Checkbox in fixed-width wrapper so alignment holds when hidden
             cb = QCheckBox()
@@ -2051,9 +2211,11 @@ class FuriganaAction(InterfaceAction):
             cb_box_inner.addStretch()
             cb_box.setLayout(cb_box_inner)
 
-            # ── Title (eliding, clickable — toggles the checkbox)
-            title_lbl = ElidedLabel(row['title'])
-            title_lbl.setToolTip(row['title'])
+            # ── Title — Author (eliding, clickable — toggles the checkbox)
+            display_title = (f"{row['title']}  —  {row['author']}"
+                             if row['author'] else row['title'])
+            title_lbl = ElidedLabel(display_title)
+            title_lbl.setToolTip(display_title)
             title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
             title_lbl.clicked.connect(
                 lambda _=None, c=cb, bid=row['book_id']:
@@ -2068,8 +2230,7 @@ class FuriganaAction(InterfaceAction):
                 status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             status_lbl.setMinimumWidth(170)
 
-            # ── Sub-label: language · formats  (reason appended when disabled)
-            _base = f'{lang}  ·  {fmts}'
+            # ── Sub-label: title/content scripts + formats (⚠ when mismatched)
             sub_lbl = QLabel(_base)
             sub_lbl.setStyleSheet(_SUB_STYLE)
 
@@ -2138,21 +2299,21 @@ class FuriganaAction(InterfaceAction):
 
         # ── Logic helpers ─────────────────────────────────────────
 
-        def _is_applicable(lang_info, going_s2t):
+        def _is_applicable(lang_info, title_script, going_s2t):
             """
-            True if this book (already known to be Chinese or unknown) can be
-            meaningfully converted in the given direction.
-            - Simplified  → S→T only
-            - Traditional → T→S only
-            - Unknown Chinese (bare zh) or no metadata → both directions
+            True if this book needs work in the given direction — either content
+            conversion or title/author metadata is not yet in the target script.
             """
             li = lang_info
             if not li['is_chinese']:
                 return True   # unknown metadata — show as applicable, let user decide
             if going_s2t:
-                return li['is_simplified'] or not li['is_traditional']
+                content_ok = li['is_simplified'] or not li['is_traditional']
+                meta_ok    = title_script == 'simplified'
             else:
-                return li['is_traditional'] or not li['is_simplified']
+                content_ok = li['is_traditional'] or not li['is_simplified']
+                meta_ok    = title_script == 'traditional'
+            return content_ok or meta_ok
 
         def _update_apply_state():
             """Enable Apply iff at least one applicable book is checked."""
@@ -2226,7 +2387,7 @@ class FuriganaAction(InterfaceAction):
             # Show checkbox only for applicable rows; wrapper keeps alignment
             cb.setVisible(applicable)
 
-            # Sub-label always shows plain "lang · formats" — no reason suffix
+            # Sub-label always shows script/title info — no reason suffix
             sl.setText(base)
             sl.setStyleSheet(_SUB_STYLE)
 
@@ -2246,7 +2407,8 @@ class FuriganaAction(InterfaceAction):
             going_s2t = rb_s2t.isChecked()
             applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
-                applicable = _is_applicable(row['lang_info'], going_s2t)
+                applicable = _is_applicable(
+                    row['lang_info'], row.get('title_script', 'unknown'), going_s2t)
                 if applicable:
                     applicable_ids.add(row['book_id'])
                 cb.setVisible(applicable)
@@ -2261,7 +2423,8 @@ class FuriganaAction(InterfaceAction):
             going_s2t = rb_s2t.isChecked()
             applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
-                applicable = _is_applicable(row['lang_info'], going_s2t)
+                applicable = _is_applicable(
+                    row['lang_info'], row.get('title_script', 'unknown'), going_s2t)
                 if applicable:
                     applicable_ids.add(row['book_id'])
                 cb.setVisible(applicable)
@@ -2301,7 +2464,8 @@ class FuriganaAction(InterfaceAction):
             rb_s2t.setEnabled(False)
             rb_t2s.setEnabled(False)
             var_combo.setEnabled(False)
-            meta_cb.setEnabled(False)
+            meta_only_cb.setEnabled(False)
+            meta_only_lbl.setEnabled(False)
             header_cb.setEnabled(False)
             for cb in checkboxes:
                 cb.setEnabled(False)
@@ -2311,7 +2475,8 @@ class FuriganaAction(InterfaceAction):
             rb_s2t.setEnabled(True)
             rb_t2s.setEnabled(True)
             var_combo.setEnabled(True)
-            meta_cb.setEnabled(True)
+            meta_only_cb.setEnabled(True)
+            meta_only_lbl.setEnabled(True)
             header_cb.setEnabled(True)
             _restore_cb_enabled()
 
@@ -2346,144 +2511,226 @@ class FuriganaAction(InterfaceAction):
             going_s2t = rb_s2t.isChecked()
             variant   = var_combo.currentData() if going_s2t else 't2s'
             direction = 'S→T' if going_s2t else 'T→S'
+            meta_only = meta_only_cb.isChecked()
             if not variant:
                 return
+
+            def _content_already_target(row):
+                li = row['lang_info']
+                return li.get('is_traditional') if going_s2t else li.get('is_simplified')
+
+            if meta_only:
+                content_tasks   = [r for r in tasks if not _content_already_target(r)]
+                skipped_content = [r for r in tasks if _content_already_target(r)]
+            else:
+                content_tasks   = tasks
+                skipped_content = []
+
+            skipped_ids = {r['book_id'] for r in skipped_content}
 
             _lock_controls()
             ok_btn.setEnabled(False)
             result_te.setVisible(False)
             QApplication.processEvents()
 
-            # Reset status labels for the books being processed
             for row in tasks:
                 lbl = status_labels[row['book_id']]
                 lbl.setText('')
                 lbl.setStyleSheet('')
 
-            done    = [False]
-            outcome = [None]
+            import time as _time
+
+            results      = []
+            saved        = 0
+            save_errors  = []
+            timed_out_ids = set()
 
             target_lang = 'zh-Hant' if going_s2t else 'zh-Hans'
-            worker = ChineseWorker(tasks, variant, target_lang=target_lang)
 
-            def on_book_started(book_id):
-                lbl = status_labels.get(book_id)
-                if lbl:
-                    lbl.setText('⏳ Converting…')
-                    lbl.setStyleSheet('color: #545454;')
+            # Process one book at a time so a timeout on one doesn't block the rest
+            for task in content_tasks:
+                _done    = [False]
+                _outcome = [None]
+                worker   = ChineseWorker([task], variant, target_lang=target_lang)
 
-            def on_book_finished(book_id, ok, msg):
-                lbl = status_labels.get(book_id)
-                if lbl:
-                    if ok:
-                        lbl.setText('✅ Done')
-                        lbl.setStyleSheet('color: green;')
-                    else:
+                def _on_book_started(bid):
+                    lbl = status_labels.get(bid)
+                    if lbl:
+                        lbl.setText('⏳ Converting…')
+                        lbl.setStyleSheet('color: #545454;')
+
+                def _on_book_finished(bid, ok, msg):
+                    lbl = status_labels.get(bid)
+                    if lbl:
+                        if ok:
+                            lbl.setText('✅ Done')
+                            lbl.setStyleSheet('color: green;')
+                            cb = cb_map.get(bid)
+                            if cb:
+                                cb.setVisible(False)
+                        else:
+                            lbl.setText('⚠ Error')
+                            lbl.setStyleSheet('color: red;')
+                            lbl.setToolTip(msg)
+
+                def _on_done(ok, res, tb, _d=_done, _o=_outcome):
+                    _d[0] = True
+                    _o[0] = (ok, res, tb)
+
+                worker.book_started.connect(_on_book_started)
+                worker.book_finished.connect(_on_book_finished)
+                worker.finished.connect(_on_done)
+                worker.start()
+
+                _start     = _time.time()
+                _timed_out = False
+                while not _done[0]:
+                    QApplication.processEvents()
+                    if _time.time() - _start > 300:
+                        # Disconnect signals before abandoning so the thread
+                        # can finish in the background without touching the UI
+                        try: worker.book_started.disconnect()
+                        except: pass
+                        try: worker.book_finished.disconnect()
+                        except: pass
+                        try: worker.finished.disconnect()
+                        except: pass
+                        _timed_out = True
+                        break
+
+                if _timed_out:
+                    timed_out_ids.add(task['book_id'])
+                    lbl = status_labels.get(task['book_id'])
+                    if lbl:
+                        lbl.setText('⚠ Timed out')
+                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip(
+                            'Conversion timed out after 5 minutes. '
+                            'This usually means the opencc library failed to load '
+                            '(possible architecture mismatch — rebuild the plugin '
+                            'zip on a machine with the same CPU as this one).')
+                    for _fmt_key, _fmt_name in [
+                            ('epub','EPUB'),('html','HTML'),('fb2','FB2'),('txt','TXT')]:
+                        if task.get(_fmt_key):
+                            results.append((task['book_id'], _fmt_name, None, 'Timed out'))
+                    continue
+
+                worker.wait()
+                ok2, book_results, tb = _outcome[0]
+
+                if not ok2:
+                    lbl = status_labels.get(task['book_id'])
+                    if lbl:
                         lbl.setText('⚠ Error')
                         lbl.setStyleSheet('color: red;')
-                        lbl.setToolTip(msg)
-
-            def on_done(ok, results, tb):
-                done[0]    = True
-                outcome[0] = (ok, results, tb)
-
-            worker.book_started.connect(on_book_started)
-            worker.book_finished.connect(on_book_finished)
-            worker.finished.connect(on_done)
-            worker.start()
-
-            while not done[0]:
-                QApplication.processEvents()
-
-            worker.wait()
-
-            ok2, results, tb = outcome[0]
-
-            if not ok2:
-                result_te.setPlainText(f'⚠ Unexpected error:\n{tb}')
-                result_te.setVisible(True)
-                _unlock_controls()
-                _update_apply_state()
-                return
-
-            # Save converted files back to Calibre
-            saved       = 0
-            save_errors = []
-            for book_id, fmt, tmp_path, err in results:
-                lbl = status_labels.get(book_id)
-                if err or not tmp_path:
-                    save_errors.append(f'{fmt} ({book_id}): {err}')
-                    if lbl and lbl.text() != '⚠ Error':
-                        lbl.setText('⚠ Conv. error')
-                        lbl.setStyleSheet('color: red;')
+                        lbl.setToolTip((tb or '')[:300])
+                    for _fmt_key, _fmt_name in [
+                            ('epub','EPUB'),('html','HTML'),('fb2','FB2'),('txt','TXT')]:
+                        if task.get(_fmt_key):
+                            results.append((task['book_id'], _fmt_name, None,
+                                            tb or 'Unknown error'))
                     continue
-                try:
-                    if prefs['keep_original']:
-                        orig = next(
-                            (t.get(fmt.lower()) for t in tasks if t['book_id'] == book_id),
-                            None,
-                        )
-                        if orig:
-                            orig_fmt = f'ORIGINAL_{fmt}'
-                            if not db.has_format(book_id, orig_fmt):
-                                with open(orig, 'rb') as _f:
-                                    self.gui.current_db.add_format(
-                                        book_id, orig_fmt, _f,
-                                        index_is_id=True, notify=False, replace=False)
-                    db.add_format(book_id, fmt, tmp_path, replace=True)
-                    saved += 1
-                except Exception as e:
-                    save_errors.append(f'{fmt} ({book_id}): save failed: {e}')
-                    if lbl:
-                        lbl.setText('⚠ Save error')
-                        lbl.setStyleSheet('color: red;')
-                        lbl.setToolTip(str(e))
-                finally:
-                    try: os.unlink(tmp_path)
-                    except: pass
 
-            # Update metadata (title + authors) if requested
-            meta_updated = 0
-            meta_errors  = []
-            if meta_cb.isChecked():
-                try:
+                # Save converted files for this book
+                for book_id, fmt, tmp_path, err in book_results:
+                    lbl = status_labels.get(book_id)
+                    if err or not tmp_path:
+                        save_errors.append(f'{fmt} ({book_id}): {err}')
+                        if lbl and lbl.text() != '⚠ Error':
+                            lbl.setText('⚠ Conv. error')
+                            lbl.setStyleSheet('color: red;')
+                        results.append((book_id, fmt, None, err))
+                        continue
                     try:
-                        from calibre_plugins.furigana_ruby.chinese_engine import _get_converter
-                    except ImportError:
-                        from chinese_engine import _get_converter
-                    converter     = _get_converter(variant)
-                    seen_book_ids = set()
-                    for book_id, _, tmp_path, err in results:
-                        if err or book_id in seen_book_ids:
-                            continue
-                        seen_book_ids.add(book_id)
-                        try:
-                            title     = db.field_for('title', book_id) or ''
-                            new_title = converter.convert(title)
-                            if new_title != title:
-                                db.set_field('title', {book_id: new_title})
+                        if prefs['keep_original']:
+                            orig = task.get(fmt.lower())
+                            if orig:
+                                orig_fmt = f'ORIGINAL_{fmt}'
+                                if not db.has_format(book_id, orig_fmt):
+                                    with open(orig, 'rb') as _f:
+                                        self.gui.current_db.add_format(
+                                            book_id, orig_fmt, _f,
+                                            index_is_id=True, notify=False, replace=False)
+                        db.add_format(book_id, fmt, tmp_path, replace=True)
+                        saved += 1
+                        results.append((book_id, fmt, tmp_path, None))
+                    except Exception as e:
+                        save_errors.append(f'{fmt} ({book_id}): save failed: {e}')
+                        if lbl:
+                            lbl.setText('⚠ Save error')
+                            lbl.setStyleSheet('color: red;')
+                            lbl.setToolTip(str(e))
+                        results.append((book_id, fmt, None, str(e)))
+                    finally:
+                        try: os.unlink(tmp_path)
+                        except: pass
 
-                            authors     = list(db.field_for('authors', book_id) or [])
-                            new_authors = [converter.convert(a) for a in authors]
-                            if new_authors != authors:
-                                db.set_field('authors', {book_id: new_authors})
+            # Books whose content conversion failed or timed out — skip metadata
+            failed_content_ids = {r[0] for r in results if r[3]} | timed_out_ids
 
-                            meta_updated += 1
-                        except Exception as e:
-                            meta_errors.append(f'Book {book_id}: {e}')
-                except Exception as e:
-                    meta_errors.append(f'Converter unavailable: {e}')
+            # Update metadata (title + authors) — always, for all selected tasks
+            meta_updated  = 0
+            meta_errors   = []
+            target_script = 'traditional' if going_s2t else 'simplified'
+            try:
+                try:
+                    from calibre_plugins.furigana_ruby.chinese_engine import _get_converter
+                except ImportError:
+                    from chinese_engine import _get_converter
+                converter = _get_converter(variant)
+                for row in tasks:
+                    book_id = row['book_id']
+                    if book_id in failed_content_ids:
+                        continue
+                    try:
+                        title     = db.field_for('title', book_id) or ''
+                        new_title = converter.convert(title)
+                        if new_title != title:
+                            db.set_field('title', {book_id: new_title})
+
+                        authors     = list(db.field_for('authors', book_id) or [])
+                        new_authors = [converter.convert(a) for a in authors]
+                        if new_authors != authors:
+                            db.set_field('authors', {book_id: new_authors})
+
+                        meta_updated += 1
+                        row['title_script'] = target_script
+
+                        if book_id in skipped_ids:
+                            lbl = status_labels.get(book_id)
+                            if lbl:
+                                lbl.setText('✅ Metadata updated')
+                                lbl.setStyleSheet('color: green;')
+                            cb = cb_map.get(book_id)
+                            if cb:
+                                cb.setVisible(False)
+                    except Exception as e:
+                        meta_errors.append(f'Book {book_id}: {e}')
+            except Exception as e:
+                meta_errors.append(f'Converter unavailable: {e}')
 
             self.gui.library_view.model().refresh_ids(
-                list({r[0] for r in results}))
+                list({r['book_id'] for r in tasks}))
 
             # Summary
-            lines = [
-                f'✅ Converted {saved} format(s) across {len(tasks)} book(s)'
-                f'  [{direction} / {variant}]'
-            ]
+            lines = []
+            n_attempted = len(content_tasks)
+            n_failed    = len({r[0] for r in results if r[3]})
+            n_succeeded = len(content_tasks) - len(timed_out_ids) - n_failed
+            if content_tasks:
+                lines.append(
+                    f'✅ Converted {saved} format(s) across {n_succeeded} book(s)'
+                    f'  [{direction} / {variant}]'
+                )
+            if timed_out_ids:
+                lines.append(
+                    f'⚠ {len(timed_out_ids)} book(s) timed out — conversion skipped '
+                    f'(see individual book rows for details)')
+            if skipped_content:
+                lines.append(
+                    f'   Skipped content re-processing for {len(skipped_content)} book(s)')
             if meta_updated:
-                lines.append(f'   Updated metadata for {meta_updated} book(s)')
+                lines.append(f'   Updated title/author metadata for {meta_updated} book(s)')
             if save_errors:
                 lines.append(f'⚠ {len(save_errors)} save error(s):')
                 lines += [f'  {e}' for e in save_errors[:5]]
@@ -2495,28 +2742,24 @@ class FuriganaAction(InterfaceAction):
             result_te.setVisible(True)
             result_te.setPlainText('\n'.join(lines))
 
-            # Update lang_info in memory for successfully converted books so
-            # _restore_cb_enabled (called by _unlock_controls) correctly
-            # disables them for the same direction on the next Apply.
+            # Update lang_info in memory for successfully converted content books
             converted_ids = {r[0] for r in results if not r[3]}
             lang_code = 'zh-Hant' if going_s2t else 'zh-Hans'
             for row in book_rows:
-                if row['book_id'] in converted_ids:
+                bid = row['book_id']
+                if bid in converted_ids:
                     if going_s2t:
                         row['lang_info']['is_simplified'] = False
                         row['lang_info']['is_traditional'] = True
                     else:
                         row['lang_info']['is_traditional'] = False
                         row['lang_info']['is_simplified'] = True
-                    _script_cache[str(row['book_id'])] = lang_code
-                    # Rebuild sub_base_text and update widget directly
-                    new_lang = _script_label(row['lang_info'])
-                    fmts = '  '.join(f for f, p in [
-                        ('EPUB', row['epub']), ('HTML', row['html']),
-                        ('FB2',  row['fb2']),  ('TXT',  row['txt'])] if p)
-                    new_base = f'{new_lang}  ·  {fmts}'
-                    sub_base_text[row['book_id']] = new_base
-                    sub_labels[row['book_id']].setText(new_base)
+                    _script_cache[str(bid)] = lang_code
+                # Rebuild sub-label for all processed books (content or metadata)
+                if bid in converted_ids or bid in skipped_ids:
+                    new_base = _compute_sub_base(row)
+                    sub_base_text[bid] = new_base
+                    sub_labels[bid].setText(new_base)
 
             _unlock_controls()
             _update_apply_state()
@@ -2546,6 +2789,9 @@ class FuriganaAction(InterfaceAction):
         vl.addWidget(bb)
         if (dlg.exec() if PYQT6 else dlg.exec_()):
             widget.save_settings()
+            action = ('chinese'   if widget._rb_tile_zh.isChecked() else
+                      'direction' if widget._rb_tile_dir.isChecked() else 'ruby')
+            self._apply_tile_action(action)
 
     # ── About ─────────────────────────────────────────────────────
 
@@ -2556,7 +2802,8 @@ class FuriganaAction(InterfaceAction):
         html = (
             f'<h3>振り仮名 Ruby & More Plugin <span style="font-size:small;color:grey;">v{ver}</span></h3>'
             '<p>A Calibre plugin for East Asian ebooks. Select one or more books, '
-            'click the <b>振り仮名</b> toolbar button, and choose a command.</p>'
+            'click the <b>振り仮名</b> toolbar button, and choose a command. '
+            'The toolbar button\'s default action is configurable in Preferences.</p>'
             '<hr/>'
 
             '<p><b>振り仮名 &mdash; Edit Ruby&hellip;</b>'
@@ -2575,6 +2822,10 @@ class FuriganaAction(InterfaceAction):
             'Converts between Simplified and Traditional Chinese. '
             'Supports 8 OpenCC variants including Taiwan (正體), Hong Kong (港式繁體), '
             'and phrase-level vocabulary conversion. '
+            'Title and author metadata are always converted alongside book content. '
+            'The dialog detects script mismatches between content and metadata and flags them with &#9888;. '
+            'A checkbox lets you skip content re-processing for books already in the target script '
+            'and fix only the title/author. '
             'Text nodes only &mdash; tags, CSS, and scripts are never modified.</p>'
             '<hr/>'
 

@@ -18,15 +18,32 @@ import zipfile
 
 # ── Script detection character sets ──────────────────────────────────────────
 #
-# Characters that appear ONLY in simplified Chinese text (never in traditional):
+# Characters that appear ONLY in simplified Chinese text (never in traditional).
+# Each char here has a distinct Traditional counterpart in _TRAD_ONLY (same order).
 _SIMP_ONLY = frozenset(
+    # Core set (high-frequency function words and common characters)
     '来时这说话见开个们样过还给让头实国为会对无电动长门问学关岁'
     '虽双点办欢间请谢边发书读语东从种车务经认义属专历总别处达'
+    # Extended — very common in Chinese fiction titles and author names
+    '爱梦旧戏变谁万娇忆惊泪静战亲缘传续归宠凤网龙飞华丽恋'
+    '灵剑风怀兴环执获纪协换该讨损购护积众齐继严坏态农沧尝试'
+    '维师温残厌轻权伤难强现际级终绝阳阴带统观报图标选编产线联'
+    '听营业侦笔记韵哑饱浓鱼丧苍贫暧苏闲两镖词蓝鸡萝临阵乱弃随陆决'
+    '妆犹裤猫兰桥马号结场尽纯团诗红许闪机饼败误须陈济废铁刚儿骄瑶钟晓腻错'
+    '称职调当灯气娱乐钰颠镜恶闻敌纠绮顾跃笼蛊钱离异录与户圣殒谐鸦潜麦秽袜'
 )
-# Their traditional-script counterparts (never appear in simplified):
+# Their traditional-script counterparts (never appear in simplified).
 _TRAD_ONLY = frozenset(
+    # Core set
     '來時這說話見開個們樣過還給讓頭實國為會對無電動長門問學關歲'
     '雖雙點辦歡間請謝邊發書讀語東從種車務經認義屬專歷總別處達'
+    # Extended — very common in Chinese fiction titles and author names
+    '愛夢舊戲變誰萬嬌憶驚淚靜戰親緣傳續歸寵鳳網龍飛華麗戀'
+    '靈劍風懷興環執獲紀協換該討損購護積眾齊繼嚴壞態農滄嘗試'
+    '維師溫殘厭輕權傷難強現際級終絕陽陰帶統觀報圖標選編產線聯'
+    '聽營業偵筆記韻啞飽濃魚喪蒼貧曖蘇閒兩鏢詞藍雞蘿臨陣亂棄隨陸決'
+    '妝猶褲貓蘭橋馬號結場盡純團詩紅許閃機餅敗誤須陳濟廢鐵剛兒驕瑤鍾曉膩錯'
+    '稱職調當燈氣娛樂鈺顛鏡惡聞敵糾綺顧躍籠蠱錢離異錄與戶聖殞諧鴉潛麥穢襪'
 )
 
 
@@ -46,6 +63,22 @@ def detect_script_from_text(text):
         return 'simplified'
     if trad >= simp * 2:
         return 'traditional'
+    return 'unknown'
+
+
+def detect_script_short(text):
+    """Script detection for short strings (title, author) — works with even 1 character.
+
+    Unlike detect_script_from_text, uses no minimum threshold so short titles
+    are not returned as 'unknown' just because there aren't enough characters.
+    Returns 'simplified', 'traditional', or 'unknown' (tie or no CJK found).
+    """
+    simp = sum(1 for c in text if c in _SIMP_ONLY)
+    trad = sum(1 for c in text if c in _TRAD_ONLY)
+    if trad > simp:
+        return 'traditional'
+    if simp > trad:
+        return 'simplified'
     return 'unknown'
 
 

@@ -33,6 +33,7 @@ prefs.defaults['default_mode']          = 'all'
 prefs.defaults['show_toggle_btn']       = True
 prefs.defaults['s2t_variant']           = 's2twp'
 prefs.defaults['t2s_variant']           = 't2s'
+prefs.defaults['tile_action']           = 'ruby'
 prefs.defaults['keep_original']         = False
 prefs.defaults['auto_chinese_enabled']  = False
 prefs.defaults['auto_chinese_direction']= 's2t'
@@ -134,6 +135,31 @@ class ConfigWidget(QWidget):
         outer = QVBoxLayout()
         outer.setContentsMargins(8, 8, 8, 8)
         self.setLayout(outer)
+
+        # ── Tile Action ───────────────────────────────────────────
+        tile_group = QGroupBox('Tile Action')
+        tile_layout = QVBoxLayout()
+        tile_layout.setSpacing(6)
+
+        tile_note = QLabel('Choose what happens when you click the main toolbar button.')
+        tile_note.setWordWrap(True)
+        tile_layout.addWidget(tile_note)
+
+        _sep(tile_layout)
+
+        self._rb_tile_ruby  = QRadioButton('Furigana (Ruby)')
+        self._rb_tile_zh    = QRadioButton('Chinese S↔T Conversion')
+        self._rb_tile_dir   = QRadioButton('Text Direction')
+        tile_action = pj.get('tile_action', 'ruby')
+        self._rb_tile_ruby.setChecked(tile_action == 'ruby')
+        self._rb_tile_zh.setChecked(tile_action == 'chinese')
+        self._rb_tile_dir.setChecked(tile_action == 'direction')
+        tile_layout.addWidget(self._rb_tile_ruby)
+        tile_layout.addWidget(self._rb_tile_zh)
+        tile_layout.addWidget(self._rb_tile_dir)
+
+        tile_group.setLayout(tile_layout)
+        outer.addWidget(tile_group)
 
         # ── When Modifying Books ──────────────────────────────────
         mod_group = QGroupBox('When Modifying Books')
@@ -405,6 +431,8 @@ full Launch Agent plist template.</p>
     # ── Save ──────────────────────────────────────────────────────
 
     def save_settings(self):
+        tile_action = 'ruby' if self._rb_tile_ruby.isChecked() else \
+                      'chinese' if self._rb_tile_zh.isChecked() else 'direction'
         keep_orig     = self._rb_keep.isChecked()
         chinese_on    = self._chinese_cb.isChecked()
         chinese_dir   = 's2t' if self._rb_s2t.isChecked() else 't2s'
@@ -415,6 +443,7 @@ full Launch Agent plist template.</p>
         s2t_var = variant_val if chinese_dir == 's2t' else prefs.get('s2t_variant', 's2twp')
 
         # Save to JSONConfig (plugin reads this for manual operations)
+        prefs['tile_action']            = tile_action
         prefs['keep_original']          = keep_orig
         prefs['auto_chinese_enabled']   = chinese_on
         prefs['auto_chinese_direction'] = chinese_dir
