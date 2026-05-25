@@ -262,7 +262,13 @@ class ConfigWidget(QWidget):
         self._chinese_cb.setChecked(chinese_enabled)
         imp_layout.addWidget(self._chinese_cb)
 
-        chinese_sub = QVBoxLayout()
+        chinese_sub_container = QWidget()
+        chinese_sub_container.setStyleSheet(
+            'QRadioButton:disabled { color: #aaaaaa; }'
+            ' QLabel:disabled { color: #aaaaaa; }'
+            ' QComboBox:disabled { color: #aaaaaa; }'
+        )
+        chinese_sub = QVBoxLayout(chinese_sub_container)
         chinese_sub.setContentsMargins(20, 0, 0, 4)
         chinese_sub.setSpacing(4)
 
@@ -299,10 +305,9 @@ class ConfigWidget(QWidget):
         var_row.addStretch()
         chinese_sub.addLayout(var_row)
 
-        imp_layout.addLayout(chinese_sub)
+        imp_layout.addWidget(chinese_sub_container)
 
-        self._chinese_sub_widgets = [chinese_fmt_lbl, self._rb_s2t, self._rb_t2s,
-                                     self._variant_combo, self._t2s_static_lbl, self._var_lbl]
+        self._chinese_sub_container = chinese_sub_container
         self._chinese_cb.toggled.connect(self._toggle_chinese_sub)
         self._toggle_chinese_sub(chinese_enabled)
 
@@ -315,7 +320,12 @@ class ConfigWidget(QWidget):
         self._ruby_cb.setChecked(ruby_enabled)
         imp_layout.addWidget(self._ruby_cb)
 
-        ruby_sub = QVBoxLayout()
+        ruby_sub_container = QWidget()
+        ruby_sub_container.setStyleSheet(
+            'QCheckBox:disabled { color: #aaaaaa; }'
+            ' QLabel:disabled { color: #aaaaaa; }'
+        )
+        ruby_sub = QVBoxLayout(ruby_sub_container)
         ruby_sub.setContentsMargins(20, 0, 0, 4)
         ruby_sub.setSpacing(3)
 
@@ -336,12 +346,9 @@ class ConfigWidget(QWidget):
             self._ruby_level_cbs[level] = cb
             ruby_sub.addWidget(cb)
 
-        imp_layout.addLayout(ruby_sub)
+        imp_layout.addWidget(ruby_sub_container)
 
-        self._ruby_sub_widgets = (
-            [ruby_fmt_lbl, ruby_levels_lbl] +
-            list(self._ruby_level_cbs.values())
-        )
+        self._ruby_sub_container = ruby_sub_container
         self._ruby_cb.toggled.connect(self._toggle_ruby_sub)
         self._toggle_ruby_sub(ruby_enabled)
 
@@ -352,12 +359,10 @@ class ConfigWidget(QWidget):
     # ── Slots ─────────────────────────────────────────────────────
 
     def _toggle_chinese_sub(self, on):
-        for w in self._chinese_sub_widgets:
-            w.setEnabled(on)
+        self._chinese_sub_container.setEnabled(on)
 
     def _toggle_ruby_sub(self, on):
-        for w in self._ruby_sub_widgets:
-            w.setEnabled(on)
+        self._ruby_sub_container.setEnabled(on)
 
     def _refresh_variants(self):
         going_s2t = self._rb_s2t.isChecked()
