@@ -60,12 +60,24 @@ That's it — pykakasi and all other dependencies are bundled inside the zip.
 
 ## Usage
 
-### Adding furigana
+### Toolbar button vs. dropdown menu
+
+The **振り仮名** toolbar button has two parts:
+
+- **Main button click** — runs the currently configured Tile Action (default: Furigana)
+- **Dropdown arrow ▾** — always shows all three commands regardless of the Tile Action setting
+
+To change which feature the main button launches: **Preferences → Plugins → FuriganaRuby → Customize plugin → Tile Action**.
+
+---
+
+### 振り仮名 — Furigana (Ruby)
+
+#### Adding furigana
 
 1. Select one or more Japanese EPUB books in your library
-2. Click the **振り仮名** toolbar button
-3. Choose **Edit Ruby…**
-4. Tick the JLPT levels you want annotated:
+2. Click the **振り仮名** main button, or dropdown ▾ → **Edit Ruby…**
+3. Tick the JLPT levels you want annotated:
 
    | Level | Example kanji |
    |-------|--------------|
@@ -75,17 +87,17 @@ That's it — pykakasi and all other dependencies are bundled inside the zip.
    | N2 | 握・偉・滑・褐・謙 |
    | N1 | 唖・崖・嫌・嗅・蔽 |
 
-5. Click **Apply** — processing takes a few seconds per book
+4. Click **Add Ruby** — processing takes a few seconds per book
 
 **Quick presets:** None · N1 · N1–N2 · N1–N3 ★ · N1–N4 · All
 
-### Removing furigana
+#### Removing furigana
 
-Open **Edit Ruby…** and untick levels (or all), then **Apply**. Only auto-generated ruby (blue) is removed — publisher ruby is never touched.
+Open **Edit Ruby…** and untick levels (or all), then **Add Ruby**. Only auto-generated ruby (blue) is removed — publisher ruby is never touched.
 
-### Reading in the Calibre viewer
+#### Reading in the Calibre viewer
 
-A floating toggle pill appears in the **bottom-left corner**:
+A floating toggle pill appears in the **bottom-left corner** (bottom-right for horizontal-text books):
 
 | Icon | Label | Effect |
 |------|-------|--------|
@@ -97,9 +109,49 @@ A floating toggle pill appears in the **bottom-left corner**:
 
 **Keyboard shortcuts:** `R` · `F7` · `Cmd+Shift+F` (Mac) / `Ctrl+Shift+F` (Win/Linux)
 
-### Reading via the browser content server
+#### Reading via the browser content server
 
 The toggle works identically in any browser — open Calibre's content server at `http://<your-ip>:8080` and read from any device on your local network.
+
+---
+
+### 繁 — Chinese S↔T Conversion
+
+1. Select one or more Chinese EPUB, HTML, FB2, or TXT books
+2. Click the **振り仮名** main button (if Tile Action is set to Chinese S↔T), or dropdown ▾ → **Convert Chinese S↔T…**
+3. The dialog detects each book's current script (Simplified / Traditional) and auto-checks books that need conversion. Books already in the target are unchecked and labelled accordingly.
+4. Choose a direction and variant:
+
+   | Direction | Variant | Use case |
+   |-----------|---------|----------|
+   | S → T | `s2twp` ★ | Taiwan Traditional — phrase-level vocabulary (recommended) |
+   | S → T | `s2tw` | Taiwan Traditional — character-level only |
+   | S → T | `s2hk` | Hong Kong Traditional 港式繁體 |
+   | S → T | `s2t` | Generic Traditional |
+   | T → S | *(fixed)* | Mainland China Simplified — always uses `t2s` |
+
+5. **Metadata only** checkbox (on by default): books already in the target script receive only a title/author update; books not yet converted receive full content conversion. Title and author are always updated for all processed books.
+6. Click **Apply** — a summary reports how many books were converted, skipped, or timed out.
+
+> **Tip:** The dialog shows each book's detected script in a sub-label (`Simplified`, `Traditional`, or `⚠ mismatch` when the title script differs from the content). Use this to spot books that are already in the wrong script before applying.
+
+---
+
+### ↔ — Text Direction Conversion
+
+1. Select one or more CJK EPUB books
+2. Click the **振り仮名** main button (if Tile Action is set to Text Direction), or dropdown ▾ → **Convert Layout…**
+3. The dialog shows each book's current direction. For a single vertical book it pre-selects **V → H** automatically.
+4. Choose target direction: **Horizontal** or **Vertical**
+5. Click **Convert**
+
+What the converter handles automatically:
+
+- CSS `writing-mode` across all stylesheets and inline styles
+- OPF `page-progression-direction` metadata
+- **Tate-chu-yoko** — numbers and short Latin runs are wrapped in `text-combine-upright` so they render upright in vertical columns, and unwrapped cleanly when converting back
+- **Punctuation normalisation** — Western quotes `"…"` `'…'` → CJK corner brackets `「…」` `『…』`; bare ASCII periods → ideographic full stops `。`; tab characters → ideographic spaces `　`
+- Ruby toggle button repositioned automatically (bottom-left for vertical, bottom-right for horizontal)
 
 ---
 
@@ -125,6 +177,65 @@ The toggle works identically in any browser — open Calibre's content server at
 ---
 
 ## Changelog
+
+### v1.5.0
+**New: Tile Action — configurable main toolbar button**
+- The main **振り仮名** button can now be set to open Furigana, Chinese S↔T, or Text Direction — configured under **Preferences → Plugins → FuriganaRuby → Customize plugin → Tile Action**
+- Button icon and label update immediately when the setting changes
+
+**S↔T dialog improvements**
+- **Metadata-only mode** (on by default): books already in the target script get only their title and author updated, skipping a redundant full content pass; books not yet converted still receive full conversion
+- Per-book script detection now shows title script separately from content script, with a `⚠` flag when they differ
+- **Per-book timeout** — each book has a 5-minute processing limit; timed-out books are marked and reported in the summary without blocking the remaining queue
+- Title and author are now always updated for all processed books regardless of the metadata-only setting
+
+**Bug fix**
+- Bundled dependencies no longer include `.so` / `.dylib` / `.pyd` binaries, fixing a crash on Intel Macs caused by arm64 binaries built on Apple Silicon
+
+---
+
+### v1.4.7
+- Enlarged the result summary text area in all three dialogs for better readability on longer book lists
+
+---
+
+### v1.4.6
+**Bug fix**
+- Fixed **Keep original as ORIGINAL\_EPUB** not being saved in manual single-book operations (regression introduced in v1.4.0)
+
+---
+
+### v1.4.5
+**New: Script classification cache**
+- After S↔T conversion, the resulting script (`zh-Hant` / `zh-Hans`) is cached per book
+- On subsequent dialog opens, ambiguous language tags (bare `zh` or `en`) are resolved using the cache — avoids a spurious "unknown" label on books already converted once
+
+---
+
+### v1.4.4
+**New: dc:language persistence**
+- S↔T conversion now writes `zh-Hant` or `zh-Hans` back to the `dc:language` tag in the EPUB OPF, so the correct script is reflected in Calibre's metadata and future script detection
+
+---
+
+### v1.4.3
+**Bug fix**
+- Fixed `deps_loader` failing to locate the plugin zip when running outside Calibre (e.g. from the standalone [calibre-monitor](https://github.com/tobethesidekick/calibre-monitor) script) — it now checks the standard per-platform Calibre preferences directory as a fallback
+
+---
+
+### v1.4.2
+- Added **📖 Open in Viewer** button to the S↔T and orientation dialogs (visible when a single book is selected)
+- Sub-info line in all dialogs now shows language and format (`Language · EPUB · Vertical/Horizontal` etc.)
+
+---
+
+### v1.4.1
+**Unified ruby dialog**
+- **Edit Ruby…** now uses a single dialog for both single-book and bulk operations — the same interface handles any number of selected books
+- Plugin renamed from "Furigana Ruby" to "振り仮名 Ruby & More" to reflect the expanded feature set
+
+---
 
 ### v1.4.0
 **New: Preferences panel — Auto Import & keep original**
@@ -263,15 +374,6 @@ The button should be bottom-left for vertical text and bottom-right for horizont
 
 **After converting layout, toggle is still on the wrong side**
 Running **↔ Convert Layout…** updates the button position automatically. If you converted the EPUB by another tool outside Calibre, the position won't have been updated — fix it with a remove-then-re-add ruby cycle as above.
-
-**"git-credential-osxkeychain" password dialogs pile up when pushing to GitHub**
-macOS ships with `osxkeychain` as a system-wide git credential helper. GitHub no longer accepts passwords — git hangs asking for a token. Fix (one-time, in Terminal):
-```bash
-gh auth login          # authenticate via browser if not already done
-gh auth setup-git      # tell git to use gh's token instead of keychain
-sudo git config --system --unset credential.helper   # remove conflicting system helper
-```
-After these three commands, `git push` works silently with no dialogs.
 
 **Some numbers or Latin letters still appear sideways after converting to vertical**
 This is expected for books converted with v1.1.0 or earlier. Re-run **↔ Convert Layout…** with v1.2.0+ — the converter now wraps digits and Latin runs in `text-combine-upright` spans automatically. If a character still appears sideways after reconverting, it is likely inside a CSS `<style>` block (a CSS property value, not visible text) and is not actually rendered to the screen.
