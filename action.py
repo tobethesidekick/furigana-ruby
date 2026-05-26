@@ -20,7 +20,7 @@ try:
     from PyQt6.QtCore import Qt, QThread, pyqtSignal
     from PyQt6.QtGui import (QIcon, QAction, QPainter, QPixmap,
                               QColor, QFont, QBrush, QPen, QPainterPath)
-    from PyQt6.QtCore import QRect, QRectF
+    from PyQt6.QtCore import QRect, QRectF, QSize
     PYQT6 = True
 except ImportError:
     from PyQt5.Qt import (QMenu, QProgressDialog, QApplication,
@@ -77,6 +77,31 @@ class ElidedLabel(QLabel):
             align      = Qt.AlignLeft | Qt.AlignVCenter
         elided = fm.elidedText(self.text(), elide_mode, self.width())
         painter.drawText(self.rect(), align, elided)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class WrappingClickableLabel(QLabel):
+    """
+    A word-wrapping QLabel with a clicked() signal so long book titles
+    wrap to a second line instead of being elided, while still toggling
+    the adjacent checkbox on click.
+
+    minimumSizeHint() is overridden to return a near-zero width so the
+    label never forces the row layout wider than the scroll viewport
+    (which would push the Status column off-screen).
+    """
+    clicked = pyqtSignal()
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+
+    def minimumSizeHint(self):
+        fm = self.fontMetrics()
+        return QSize(0, fm.height())
 
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -349,7 +374,8 @@ class BulkFuriganaWorker(QThread):
                         tmp_a = tempfile.mktemp(suffix='.epub')
                         _, cnt, _ = process_epub_file(src, tmp_a, mode='add',
                                                       annotate_levels=al,
-                                                      engine=self.engine)
+                                                      engine=self.engine,
+                                                      metadata_levels=task.get('final_levels'))
                         ruby_delta += cnt
                         if tmp_r:
                             try: os.unlink(tmp_r)
@@ -622,6 +648,14 @@ class FuriganaAction(InterfaceAction):
             from furigana_engine import get_engine_id
         return get_engine_id(path)
 
+    def _get_stored_levels(self, path):
+        """Return the JLPT levels stored in the EPUB CSS tag, or None for old EPUBs."""
+        try:
+            from calibre_plugins.furigana_ruby.furigana_engine import get_stored_levels
+        except ImportError:
+            from furigana_engine import get_stored_levels
+        return get_stored_levels(path)
+
     # ── Entry point ───────────────────────────────────────────────
 
     def open_main_dialog(self):
@@ -684,10 +718,12 @@ class FuriganaAction(InterfaceAction):
                     auto_count = pub_count = 0
                 current_levels   = self._get_annotated_levels(epub_path)
                 stored_engine_id = self._get_engine_id(epub_path) if auto_count else None
+                stored_levels    = self._get_stored_levels(epub_path)
             else:
                 auto_count = pub_count = 0
                 current_levels   = set()
                 stored_engine_id = None
+                stored_levels    = None
 
             book_rows.append({
                 'book_id':          book_id,
@@ -700,6 +736,7 @@ class FuriganaAction(InterfaceAction):
                 'pub_count':        pub_count,
                 'current_levels':   current_levels,
                 'stored_engine_id': stored_engine_id,
+                'stored_levels':    stored_levels,
             })
 
         eligible_rows = [r for r in book_rows if r['ruby_allowed']]
@@ -786,6 +823,7 @@ class FuriganaAction(InterfaceAction):
                               for l in ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']}
         level_cbs          = {}   # populated only while expanded
         _pre_expand_levels = [None]
+        _cust_btn_ref      = [None]   # reference to collapsed Customize button
 
         _LEVEL_ORDER = ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']
 
@@ -848,6 +886,7 @@ class FuriganaAction(InterfaceAction):
                 btn_cust.setCursor(Qt.PointingHandCursor)
             btn_cust.clicked.connect(_build_expanded)
             hdr_hl.addWidget(btn_cust)
+            _cust_btn_ref[0] = btn_cust
             hdr_hl.addStretch()
 
             sel_lbl = QLabel(_current_sel_text())
@@ -860,6 +899,7 @@ class FuriganaAction(InterfaceAction):
 
         def _build_expanded():
             _pre_expand_levels[0] = {l for l, v in level_checked.items() if v}
+            _cust_btn_ref[0] = None   # collapsed widget about to be destroyed
             _clear_jlpt()
 
             frame = QFrame()
@@ -939,6 +979,7 @@ class FuriganaAction(InterfaceAction):
                 prefs['annotate_levels'] = sorted(
                     l for l, v in level_checked.items() if v)
                 _build_collapsed()
+                _refresh_checks_ruby(preserve_status=False)
 
             def _on_cancel():
                 prev = _pre_expand_levels[0] or set()
@@ -1146,11 +1187,35 @@ class FuriganaAction(InterfaceAction):
 
         _SUB_STYLE = 'color: #545454; font-size: 11px;'
         _DIM_STYLE  = 'color: #959595;'
+        _top_align  = Qt.AlignmentFlag.AlignTop if PYQT6 else Qt.AlignTop
+
+        _ENG_SHORT = {
+            'standard':      'Standard',
+            'enhanced':      'Enhanced',
+            'high_accuracy': 'High-accuracy',
+        }
+        _LVL_ORDER = ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']
+
+        def _fmt_sub_text(row):
+            if not row['ruby_allowed']:
+                return f'{row["lang_label"]} · EPUB'
+            line1 = f'{row["lang_label"]} · Publisher: {row["pub_count"]:,}'
+            if not row['auto_count']:
+                return line1
+            parts2 = [f'Auto: {row["auto_count"]:,}']
+            stored = row.get('stored_levels')
+            if stored is not None and stored:
+                lvl_str = ', '.join(l for l in _LVL_ORDER if l in stored)
+                if lvl_str:
+                    parts2.append(lvl_str)
+            eid = row.get('stored_engine_id')
+            if eid:
+                parts2.append(f'Engine: {_ENG_SHORT.get(eid, eid)}')
+            return line1 + '\n' + ' · '.join(parts2)
 
         checkboxes    = []
         status_labels = {}
         sub_labels    = {}
-        sub_base_text = {}
         cb_map        = {}
         applicable_ids = set(r['book_id'] for r in eligible_rows)
 
@@ -1168,14 +1233,14 @@ class FuriganaAction(InterfaceAction):
             cb_box_inner.addStretch()
             cb_box.setLayout(cb_box_inner)
 
-            title_lbl = ElidedLabel(row['title'])
+            title_lbl = WrappingClickableLabel(row['title'])
             title_lbl.setToolTip(row['title'])
             title_lbl.setSizePolicy(sp_pol.Expanding, sp_pol.Preferred)
             if not row['ruby_allowed']:
                 title_lbl.setStyleSheet(_DIM_STYLE)
             title_lbl.clicked.connect(
-                lambda _=None, c=cb, bid=row['book_id']:
-                    c.toggle() if bid in applicable_ids and c.isEnabled() else None)
+                lambda _=None, c=cb:
+                    c.toggle() if c.isVisible() and c.isEnabled() else None)
 
             status_lbl = QLabel('' if row['ruby_allowed'] else 'Not applicable')
             try:
@@ -1187,30 +1252,17 @@ class FuriganaAction(InterfaceAction):
             if not row['ruby_allowed']:
                 status_lbl.setStyleSheet('color: #959595;')
 
-            _ENG_SHORT = {
-                'standard':      'Standard',
-                'enhanced':      'Enhanced',
-                'high_accuracy': 'High-accuracy',
-            }
-            if row['ruby_allowed']:
-                sub_text = (f'{row["lang_label"]} · '
-                            f'Publisher: {row["pub_count"]:,} · '
-                            f'Auto: {row["auto_count"]:,}')
-                eid = row.get('stored_engine_id')
-                if eid:
-                    sub_text += f' · Engine: {_ENG_SHORT.get(eid, eid)}'
-            else:
-                sub_text = f'{row["lang_label"]} · EPUB'
-
+            sub_text = _fmt_sub_text(row)
             sub_lbl = QLabel(sub_text)
+            sub_lbl.setSizePolicy(sp_pol.Expanding, sp_pol.Preferred)
             sub_lbl.setStyleSheet(_SUB_STYLE if row['ruby_allowed'] else _DIM_STYLE)
 
             top_row = QHBoxLayout()
             top_row.setSpacing(4)
             top_row.setContentsMargins(0, 0, 0, 0)
-            top_row.addWidget(cb_box)
+            top_row.addWidget(cb_box, 0, _top_align)
             top_row.addWidget(title_lbl, 3)
-            top_row.addWidget(status_lbl, 1)
+            top_row.addWidget(status_lbl, 1, _top_align)
 
             sub_row = QHBoxLayout()
             sub_row.setContentsMargins(24, 0, 0, 2)
@@ -1231,7 +1283,6 @@ class FuriganaAction(InterfaceAction):
             cb_map[row['book_id']]        = cb
             status_labels[row['book_id']] = status_lbl
             sub_labels[row['book_id']]    = sub_lbl
-            sub_base_text[row['book_id']] = sub_text
 
         list_layout.addStretch()
         scroll.setWidget(list_widget)
@@ -1265,7 +1316,9 @@ class FuriganaAction(InterfaceAction):
 
         # ── Header checkbox logic ─────────────────────────────────
         def _eligible_cbs():
-            return [cb_map[bid] for bid in applicable_ids if bid in cb_map]
+            # Only visible checkboxes — hidden means "up to date" or "not applicable"
+            return [cb_map[bid] for bid in applicable_ids
+                    if bid in cb_map and cb_map[bid].isVisible()]
 
         def _update_apply_state():
             any_checked = any(cb.isChecked() for cb in _eligible_cbs())
@@ -1307,6 +1360,8 @@ class FuriganaAction(InterfaceAction):
             for lvl_cb in level_cbs.values():
                 lvl_cb.setEnabled(False)
             btn_apply.setEnabled(False)
+            if _cust_btn_ref[0]:
+                _cust_btn_ref[0].setEnabled(False)
 
         def _unlock_controls():
             header_cb.setEnabled(True)
@@ -1315,6 +1370,42 @@ class FuriganaAction(InterfaceAction):
                     cb.setEnabled(True)
             for lvl_cb in level_cbs.values():
                 lvl_cb.setEnabled(True)
+            if _cust_btn_ref[0]:
+                _cust_btn_ref[0].setEnabled(True)
+            _update_apply_state()
+
+        # ── Per-book up-to-date check ─────────────────────────────
+        def _refresh_checks_ruby(preserve_status=False):
+            """Show/hide checkboxes based on stored levels vs current selection.
+
+            preserve_status=True  — keep '✅ Done' labels (called post-processing)
+            preserve_status=False — update status to 'Up to date' or clear it
+                                    (called when JLPT levels change)
+            """
+            current_sel = {l for l, v in level_checked.items() if v}
+            for row in book_rows:
+                if not row['ruby_allowed']:
+                    continue
+                bid = row['book_id']
+                cb  = cb_map.get(bid)
+                sl  = status_labels.get(bid)
+                if cb is None or sl is None:
+                    continue
+                stored = row.get('stored_levels')
+                # stored is None → old EPUB, no data-levels tag → always processable
+                if stored is not None and stored == current_sel:
+                    cb.setVisible(False)
+                    cb.setChecked(False)
+                    if not preserve_status:
+                        sl.setText('Up to date')
+                        sl.setStyleSheet('color: #545454;')
+                else:
+                    if not cb.isVisible():
+                        cb.setVisible(True)
+                        cb.setChecked(True)
+                    if not preserve_status and not sl.text().startswith('⚠'):
+                        sl.setText('')
+                        sl.setStyleSheet('')
             _update_apply_state()
 
         # ── Apply handler ─────────────────────────────────────────
@@ -1347,6 +1438,7 @@ class FuriganaAction(InterfaceAction):
                         'to_add':         row['current_levels'] if engine_changed else to_add,
                         'to_remove':      row['current_levels'] if engine_changed else to_remove,
                         'current_levels': row['current_levels'],
+                        'final_levels':   checked_levels.copy(),
                     })
 
             if not tasks:
@@ -1545,23 +1637,17 @@ class FuriganaAction(InterfaceAction):
                                     index_is_id=True, notify=False, replace=False)
                     db.add_format(book_id, 'EPUB', tmp_path, replace=True)
                     saved += 1
-                    # Update in-memory state so re-apply works correctly
+                    # Update in-memory state so re-apply and up-to-date checks work correctly
                     if row:
+                        new_auto = (row['auto_count'] + ruby_delta
+                                    if ruby_delta >= 0 else max(0, row['auto_count'] + ruby_delta))
+                        row['auto_count']       = new_auto
                         row['current_levels']   = checked_levels.copy()
+                        row['stored_levels']    = checked_levels.copy()
                         row['stored_engine_id'] = actual_engine_id
                         sub_lbl = sub_labels.get(book_id)
                         if sub_lbl:
-                            new_auto  = (row['auto_count'] + ruby_delta
-                                         if ruby_delta >= 0 else max(0, row['auto_count'] + ruby_delta))
-                            row['auto_count'] = new_auto
-                            _ES = {'standard': 'Standard',
-                                   'enhanced': 'Enhanced',
-                                   'high_accuracy': 'High-accuracy'}
-                            eng_part = f' · Engine: {_ES.get(actual_engine_id, actual_engine_id)}'
-                            sub_lbl.setText(
-                                f'{row["lang_label"]} · '
-                                f'Publisher: {row["pub_count"]:,} · '
-                                f'Auto: {new_auto:,}{eng_part}')
+                            sub_lbl.setText(_fmt_sub_text(row))
                 except Exception as e:
                     save_errors.append(f'Book {book_id}: save failed: {e}')
                     if sl:
@@ -1588,6 +1674,8 @@ class FuriganaAction(InterfaceAction):
                 lines += [f'  {e}' for e in save_errors[:5]]
             lines += ['', _selection_summary()]
             result_te.setPlainText('\n'.join(lines))
+            # Hide done-book checkboxes; re-enable any remaining processable books
+            _refresh_checks_ruby(preserve_status=True)
             _unlock_controls()
 
         # ── Viewer button ─────────────────────────────────────────
@@ -1608,7 +1696,8 @@ class FuriganaAction(InterfaceAction):
             btn_apply.setToolTip('No Japanese EPUB books in selection.')
             header_cb.setEnabled(False)
 
-        _update_apply_state()
+        # Initial check: hide checkboxes for books already up to date with current levels
+        _refresh_checks_ruby(preserve_status=False)
 
         dlg.exec() if PYQT6 else dlg.exec_()
 
@@ -1891,6 +1980,7 @@ class FuriganaAction(InterfaceAction):
 
         _SUB_STYLE = 'color: #545454; font-size: 11px;'
         sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        _top_align = Qt.AlignmentFlag.AlignTop if PYQT6 else Qt.AlignTop
 
         for row in book_rows:
             cb = QCheckBox()
@@ -1904,7 +1994,7 @@ class FuriganaAction(InterfaceAction):
             cb_box_inner.addStretch()
             cb_box.setLayout(cb_box_inner)
 
-            title_lbl = ElidedLabel(row['title'])
+            title_lbl = WrappingClickableLabel(row['title'])
             title_lbl.setToolTip(row['title'])
             title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
             title_lbl.clicked.connect(
@@ -1926,9 +2016,9 @@ class FuriganaAction(InterfaceAction):
             top_row = QHBoxLayout()
             top_row.setSpacing(4)
             top_row.setContentsMargins(0, 0, 0, 0)
-            top_row.addWidget(cb_box)
+            top_row.addWidget(cb_box, 0, _top_align)
             top_row.addWidget(title_lbl, 3)
-            top_row.addWidget(status_lbl, 1)
+            top_row.addWidget(status_lbl, 1, _top_align)
 
             sub_row = QHBoxLayout()
             sub_row.setContentsMargins(24, 0, 0, 2)
@@ -2261,7 +2351,8 @@ class FuriganaAction(InterfaceAction):
 
         # ── Scan selected books ───────────────────────────────────
         book_rows = []
-        excluded_counts = {}   # language label → count of books not listed
+        excluded_counts    = {}   # only 'no supported format' books (excluded from table)
+        non_applicable_counts = {}  # lang_label → count of non-applicable rows in table
 
         for book_id in book_ids:
             title      = db.field_for('title', book_id) or f'Book {book_id}'
@@ -2327,50 +2418,53 @@ class FuriganaAction(InterfaceAction):
                     elif 'hans' in cached.lower():
                         lang_info['is_simplified'] = True
 
-            # Japanese and Korean: excluded from the list but counted for the summary
-            if lang_info['is_japanese']:
-                excluded_counts['Japanese'] = excluded_counts.get('Japanese', 0) + 1
-                continue
-            if lang_info['is_korean']:
-                excluded_counts['Korean'] = excluded_counts.get('Korean', 0) + 1
+            author_str = ', '.join(authors) if authors else ''
+
+            # Japanese, Korean, etc. appear in the table as "Not applicable" rows
+            if lang_info['is_japanese'] or lang_info['is_korean']:
+                lang_label = (lang_display(lang_info) if lang_info.get('lang_raw')
+                              else 'Unknown language')
+                non_applicable_counts[lang_label] = (
+                    non_applicable_counts.get(lang_label, 0) + 1)
+                book_rows.append({'book_id': book_id, 'title': title,
+                                   'author': author_str,
+                                   'epub': epub_path, 'html': html_path,
+                                   'fb2': fb2_path,  'txt': txt_path,
+                                   'lang_info': lang_info,
+                                   'title_script': title_script,
+                                   'chinese_applicable': False,
+                                   'lang_label': lang_label})
                 continue
 
-            author_str = ', '.join(authors) if authors else ''
             book_rows.append({'book_id': book_id, 'title': title,
                                'author': author_str,
                                'epub': epub_path, 'html': html_path,
                                'fb2': fb2_path,  'txt': txt_path,
                                'lang_info': lang_info,
-                               'title_script': title_script})
+                               'title_script': title_script,
+                               'chinese_applicable': True})
 
         total_selected = len(book_ids)
-        n_chinese      = len(book_rows)
+        n_chinese = sum(1 for r in book_rows if r.get('chinese_applicable', True))
+        _chinese_book_ids = [r['book_id'] for r in book_rows
+                             if r.get('chinese_applicable', True)]
 
         def _selection_summary():
             """One-line breakdown of the full selection for the summary panel."""
             parts = []
             if n_chinese:
                 parts.append(f'{n_chinese} Chinese')
-            for lang, count in excluded_counts.items():
-                if lang != 'no supported format':
-                    parts.append(f'{count} {lang}')
+            for lang, count in non_applicable_counts.items():
+                parts.append(f'{count} {lang}')
             if excluded_counts.get('no supported format', 0):
                 parts.append(
                     f"{excluded_counts['no supported format']} without supported format")
             breakdown = ' · '.join(parts) if parts else 'none'
-            lines = [f'Selection: {total_selected} book(s) — {breakdown}']
-            excluded_non_chinese = {k: v for k, v in excluded_counts.items()
-                                    if k != 'no EPUB/TXT'}
-            if excluded_non_chinese:
-                exc_str = '  and  '.join(
-                    f'{v} {k}' for k, v in excluded_non_chinese.items())
-                lines.append(
-                    f'{exc_str} book(s) not listed — Chinese conversion only.')
-            return '\n'.join(lines)
+            return f'Selection: {total_selected} book(s) — {breakdown}'
 
-        if not book_rows:
+        if n_chinese == 0:
             # All selected books are non-Chinese — show dialog anyway so the
-            # summary explains why nothing is listed
+            # table and summary explain why nothing can be processed
             summary_only = True
         else:
             summary_only = False
@@ -2494,13 +2588,14 @@ class FuriganaAction(InterfaceAction):
 
         checkboxes    = []   # parallel to book_rows
         status_labels = {}   # book_id → QLabel
-        title_labels  = {}   # book_id → ElidedLabel
+        title_labels  = {}   # book_id → WrappingClickableLabel
         sub_labels    = {}   # book_id → QLabel  (language · formats [· reason])
         sub_base_text = {}   # book_id → computed sub-label text (title/content/format info)
         cb_map        = {}   # book_id → QCheckBox (for _apply_row_style)
         applicable_ids = set()   # book_ids currently applicable; avoids isVisible quirks
 
         _SUB_STYLE = 'color: #545454; font-size: 11px;'
+        _DIM_STYLE = 'color: #959595;'
 
         def _script_label(li):
             """Return a human-readable script label for the language column."""
@@ -2535,13 +2630,16 @@ class FuriganaAction(InterfaceAction):
             return f'{lang}  ·  {fmts}'
 
         sp_row = QSizePolicy.Policy if PYQT6 else QSizePolicy
+        _top_align = Qt.AlignmentFlag.AlignTop if PYQT6 else Qt.AlignTop
 
         for row in book_rows:
             li    = row['lang_info']
             _base = _compute_sub_base(row)
+            _ch_applicable = row.get('chinese_applicable', True)
 
             # ── Checkbox in fixed-width wrapper so alignment holds when hidden
             cb = QCheckBox()
+            cb.setVisible(_ch_applicable)
             cb_box = QWidget()
             cb_box.setFixedWidth(20)
             cb_box_inner = QHBoxLayout()
@@ -2552,36 +2650,40 @@ class FuriganaAction(InterfaceAction):
             cb_box_inner.addStretch()
             cb_box.setLayout(cb_box_inner)
 
-            # ── Title — Author (eliding, clickable — toggles the checkbox)
+            # ── Title — Author (wrapping, clickable — toggles the checkbox)
             display_title = (f"{row['title']}  —  {row['author']}"
                              if row['author'] else row['title'])
-            title_lbl = ElidedLabel(display_title)
+            title_lbl = WrappingClickableLabel(display_title)
             title_lbl.setToolTip(display_title)
             title_lbl.setSizePolicy(sp_row.Expanding, sp_row.Preferred)
+            if not _ch_applicable:
+                title_lbl.setStyleSheet(_DIM_STYLE)
             title_lbl.clicked.connect(
                 lambda _=None, c=cb, bid=row['book_id']:
                     c.toggle() if bid in applicable_ids and c.isEnabled() else None)
 
             # ── Status (right column, left-aligned to match header)
-            status_lbl = QLabel('')
+            status_lbl = QLabel('' if _ch_applicable else 'Not applicable')
             try:
                 status_lbl.setAlignment(
                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             except AttributeError:
                 status_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             status_lbl.setMinimumWidth(170)
+            if not _ch_applicable:
+                status_lbl.setStyleSheet('color: #959595;')
 
             # ── Sub-label: title/content scripts + formats (⚠ when mismatched)
             sub_lbl = QLabel(_base)
-            sub_lbl.setStyleSheet(_SUB_STYLE)
+            sub_lbl.setStyleSheet(_SUB_STYLE if _ch_applicable else _DIM_STYLE)
 
             # ── Top row: [cb_box][title ×3] [status ×1]
             top_row = QHBoxLayout()
             top_row.setSpacing(4)
             top_row.setContentsMargins(0, 0, 0, 0)
-            top_row.addWidget(cb_box)
+            top_row.addWidget(cb_box, 0, _top_align)
             top_row.addWidget(title_lbl, 3)
-            top_row.addWidget(status_lbl, 1)
+            top_row.addWidget(status_lbl, 1, _top_align)
 
             # ── Sub row: indented 24 px to align under title
             sub_row = QHBoxLayout()
@@ -2625,7 +2727,7 @@ class FuriganaAction(InterfaceAction):
 
         btn_viewer_ch = QPushButton('📖 Open in Viewer')
         btn_viewer_ch.setMinimumWidth(150)
-        btn_viewer_ch.setVisible(len(book_rows) == 1)
+        btn_viewer_ch.setVisible(n_chinese == 1)
 
         ok_btn    = QPushButton('Apply')
         ok_btn.setMinimumWidth(90)
@@ -2715,6 +2817,8 @@ class FuriganaAction(InterfaceAction):
 
         def _apply_row_style(row, applicable, going_s2t, preserve_status=False):
             """Update visual style for a single book row."""
+            if not row.get('chinese_applicable', True):
+                return  # permanently non-applicable (non-Chinese) — never re-style
             bid    = row['book_id']
             cb     = cb_map[bid]
             tl     = title_labels[bid]
@@ -2748,6 +2852,8 @@ class FuriganaAction(InterfaceAction):
             going_s2t = rb_s2t.isChecked()
             applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
+                if not row.get('chinese_applicable', True):
+                    continue  # permanently non-applicable — leave initial state
                 applicable = _is_applicable(
                     row['lang_info'], row.get('title_script', 'unknown'), going_s2t)
                 if applicable:
@@ -2764,6 +2870,8 @@ class FuriganaAction(InterfaceAction):
             going_s2t = rb_s2t.isChecked()
             applicable_ids.clear()
             for cb, row in zip(checkboxes, book_rows):
+                if not row.get('chinese_applicable', True):
+                    continue  # permanently non-applicable — leave initial state
                 applicable = _is_applicable(
                     row['lang_info'], row.get('title_script', 'unknown'), going_s2t)
                 if applicable:
@@ -2830,7 +2938,7 @@ class FuriganaAction(InterfaceAction):
         ok_btn.clicked.connect(lambda: _on_apply())
         close_btn.clicked.connect(dlg.reject)
         btn_viewer_ch.clicked.connect(
-            lambda: (dlg.reject(), self._open_in_viewer(book_rows[0]['book_id'])))
+            lambda: (dlg.reject(), self._open_in_viewer(_chinese_book_ids[0])))
 
         # Initial populate
         _refresh_variants()

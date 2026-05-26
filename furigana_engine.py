@@ -66,15 +66,19 @@ class RubyAwareParser(HTMLParser):
 # Explicit display:ruby / writing-mode overrides break vertical-rl ruby.
 # Auto ruby uses <rb>…</rb><rt>…</rt> (no <rp>) to match publisher structure.
 
-def _make_ruby_css(btn_side='left', engine_id=None):
+def _make_ruby_css(btn_side='left', engine_id=None, levels=None):
     """Return RUBY_CSS with the toggle button on 'left' (vertical) or 'right' (horizontal)."""
     css = RUBY_CSS
     if btn_side == 'right':
         css = css.replace('    left: 8px;\n', '    right: 8px;\n')
+    attrs = ''
     if engine_id:
-        css = css.replace(
-            '<style id="furigana-ruby-css">',
-            f'<style id="furigana-ruby-css" data-engine="{engine_id}">')
+        attrs += f' data-engine="{engine_id}"'
+    if levels is not None:
+        attrs += f' data-levels="{",".join(sorted(levels))}"'
+    if attrs:
+        css = css.replace('<style id="furigana-ruby-css">',
+                          f'<style id="furigana-ruby-css"{attrs}>')
     return css
 
 
@@ -277,15 +281,15 @@ RUBY_JS = """<script id="furigana-ruby-js">
 """
 
 
-def inject_css_js(html, btn_side='left', engine_id=None):
+def inject_css_js(html, btn_side='left', engine_id=None, levels=None):
     if 'id="furigana-ruby-css"' in html:
         # CSS already present (e.g. partial strip kept it).
-        # Update button side and engine ID in the existing <style> block.
+        # Update button side, engine ID, and levels in the existing <style> block.
         opposite = 'right' if btn_side == 'left' else 'left'
         _s = re.compile(
             r'(<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*>)(.*?)(</style>)',
             re.DOTALL)
-        def _upd(m, _eid=engine_id):
+        def _upd(m, _eid=engine_id, _lvls=levels):
             tag = m.group(1)
             if _eid:
                 if 'data-engine=' in tag:
@@ -293,6 +297,13 @@ def inject_css_js(html, btn_side='left', engine_id=None):
                                  f'data-engine="{_eid}"', tag)
                 else:
                     tag = tag.replace('>', f' data-engine="{_eid}">', 1)
+            if _lvls is not None:
+                lvl_str = ','.join(sorted(_lvls))
+                if 'data-levels=' in tag:
+                    tag = re.sub(r'\bdata-levels=["\'][^"\']*["\']',
+                                 f'data-levels="{lvl_str}"', tag)
+                else:
+                    tag = tag.replace('>', f' data-levels="{lvl_str}">', 1)
             updated = re.sub(
                 rf'\b{opposite}\s*:\s*8px\s*;', f'{btn_side}: 8px;', m.group(2))
             return tag + updated + m.group(3)
@@ -459,7 +470,7 @@ def segments_to_html(segments):
 
 
 def inject_furigana_html(html_content, annotate_levels=None, btn_side='left',
-                         engine=None):
+                         engine=None, metadata_levels=None):
     parser = RubyAwareParser()
     parser.feed(html_content)
     parts = []
@@ -475,7 +486,12 @@ def inject_furigana_html(html_content, annotate_levels=None, btn_side='left',
                                              engine=engine)
                 parts.append(segments_to_html(segs))
     engine_id = engine.id if engine is not None else 'standard'
-    return inject_css_js(''.join(parts), btn_side=btn_side, engine_id=engine_id)
+    # metadata_levels overrides what gets stored in data-levels when the caller
+    # is adding a delta (e.g. only N3 on top of existing N1+N2) but wants the
+    # tag to reflect the full final set (N1+N2+N3).
+    levels_to_store = metadata_levels if metadata_levels is not None else annotate_levels
+    return inject_css_js(''.join(parts), btn_side=btn_side, engine_id=engine_id,
+                         levels=levels_to_store)
 
 
 def strip_auto_furigana_html(html_content):
@@ -621,10 +637,46 @@ def get_engine_id(epub_path):
     return None
 
 
+def get_stored_levels(epub_path):
+    """
+    Return the set of JLPT levels stored in the EPUB's furigana CSS tag, or None.
+
+    Returns a set like {'N1','N2','N3'} when data-levels is present.
+    Returns None when the CSS tag exists but has no data-levels attribute
+    (pre-v1.7 EPUBs), or when no CSS tag is found at all.
+    """
+    import zipfile as _zf
+    pattern = re.compile(
+        r'<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*'
+        r'\bdata-levels=["\']([^"\']*)["\']')
+    try:
+        with _zf.ZipFile(epub_path, 'r') as zf:
+            for name in zf.namelist():
+                if not name.lower().endswith(('.xhtml', '.html', '.htm')):
+                    continue
+                try:
+                    txt = zf.read(name).decode('utf-8', errors='ignore')
+                    if 'id="furigana-ruby-css"' not in txt:
+                        continue
+                    m = pattern.search(txt)
+                    if m:
+                        raw = m.group(1).strip()
+                        if not raw:
+                            return set()
+                        return set(raw.split(','))
+                    return None  # CSS tag found but no data-levels
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
+
 # ── EPUB processor ────────────────────────────────────────────────────────────
 
 def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
-                      remove_levels=None, progress_callback=None, engine=None):
+                      remove_levels=None, progress_callback=None, engine=None,
+                      metadata_levels=None):
     import zipfile, os, tempfile, shutil
 
     if mode == 'add' and engine is None:
@@ -696,7 +748,8 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                             else:
                                 text = inject_furigana_html(
                                     text, annotate_levels=annotate_levels,
-                                    btn_side=btn_side, engine=engine)
+                                    btn_side=btn_side, engine=engine,
+                                    metadata_levels=metadata_levels)
                         elif remove_levels is not None:
                             text = strip_auto_furigana_by_levels(text, remove_levels)
                         else:
