@@ -1,6 +1,6 @@
 # 振り仮名 Ruby & More — Calibre Plugin
 
-A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one or more books, click the **振り仮名** toolbar button to add furigana. Or use the dropdown menu for additional commands. All dependencies are bundled — no separate installs needed.
+A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one or more books, click the **振り仮名** toolbar button to add furigana. Or use the dropdown menu for additional commands. All core dependencies are bundled — no separate installs needed for the default engine.
 
 [![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tobethesidekick)
 
@@ -9,9 +9,10 @@ A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one 
 ## Features
 
 ### 振り仮名 — Edit Ruby (Japanese EPUBs)
-- **Auto-generates furigana** above kanji using [pykakasi](https://github.com/miurahr/pykakasi)
+- **Two furigana engines** — Enhanced (built-in, no download) and High-accuracy (SudachiPy, ~40 MB optional download)
 - **Preserves publisher ruby** — hand-verified readings are never overwritten
 - **JLPT-level filtering** — annotate only the difficulty levels you want (N5–N1 + Unlisted)
+- **Level tracking** — books remember which levels were annotated; already up-to-date books are detected automatically on dialog open
 - **Selective add/remove** — update individual levels without reprocessing the whole book
 - **Viewer toggle** — switch between *all ruby*, *publisher only*, and *hidden* while reading
 - Works in the **Calibre desktop viewer** and **Calibre browser content server** (Chrome, Firefox, Safari, mobile)
@@ -24,7 +25,7 @@ A [Calibre](https://calibre-ebook.com) plugin for East Asian ebooks. Select one 
 - **Metadata conversion** — optionally converts title and author fields in the same pass
 - **Text nodes only** — tags, attributes, CSS, and scripts are never modified
 
-### ↔ — Convert Layout (Japanese · Chinese · Korean EPUBs)
+### ↔ — Text Direction (Japanese · Chinese · Korean EPUBs)
 - **Horizontal ↔ Vertical** text direction conversion in one click
 - Updates CSS `writing-mode` across all stylesheets, OPF `page-progression-direction`, and inline styles
 - **Tate-chu-yoko** — numbers and short Latin runs are wrapped in `text-combine-upright` so they render upright in vertical columns
@@ -54,7 +55,7 @@ Go to the [**Releases**](../../releases/latest) page and download **`FuriganaRub
 4. Click **Yes** when Calibre asks to add it
 5. Restart Calibre
 
-That's it — pykakasi and all other dependencies are bundled inside the zip.
+That's it — the Enhanced engine and all other dependencies are bundled inside the zip.
 
 ---
 
@@ -73,11 +74,25 @@ To change which feature the main button launches: **Preferences → Plugins → 
 
 ### 振り仮名 — Furigana (Ruby)
 
+#### Choosing a furigana engine
+
+The **Edit Ruby…** dialog lets you choose between two engines:
+
+| Engine | Accuracy | Setup |
+|--------|----------|-------|
+| **Enhanced** (default) | Good — handles common conjugation patterns | Built-in, no download |
+| **High-accuracy** | Best — full morphological analysis | ~40 MB one-time download via the dialog |
+
+The Enhanced engine is sufficient for most books. The High-accuracy engine (SudachiPy) is recommended for literary fiction, archaic vocabulary, or books where verb conjugations are consistently misread.
+
+> **Why conjugation matters:** A naive engine maps each kanji to its most common reading and gets inflected forms wrong — e.g. 放たれる might be misread because it doesn't recognise the passive form of 放つ. The High-accuracy engine identifies the dictionary form of each word first, then derives the reading deterministically.
+
 #### Adding furigana
 
 1. Select one or more Japanese EPUB books in your library
 2. Click the **振り仮名** main button, or dropdown ▾ → **Edit Ruby…**
-3. Tick the JLPT levels you want annotated:
+3. Choose your engine (Enhanced or High-accuracy)
+4. Tick the JLPT levels you want annotated:
 
    | Level | Example kanji |
    |-------|--------------|
@@ -87,9 +102,13 @@ To change which feature the main button launches: **Preferences → Plugins → 
    | N2 | 握・偉・滑・褐・謙 |
    | N1 | 唖・崖・嫌・嗅・蔽 |
 
-4. Click **Add Ruby** — processing takes a few seconds per book
+5. Click **Add Ruby** — processing takes a few seconds per book
 
 **Quick presets:** None · N1 · N1–N2 · N1–N3 ★ · N1–N4 · All
+
+#### Up-to-date detection
+
+Books that have already been annotated with the exact same JLPT levels as your current selection are marked **Up to date** and their checkboxes are hidden automatically. Change the level selection and the dialog immediately re-evaluates which books need reprocessing.
 
 #### Removing furigana
 
@@ -140,7 +159,7 @@ The toggle works identically in any browser — open Calibre's content server at
 ### ↔ — Text Direction Conversion
 
 1. Select one or more CJK EPUB books
-2. Click the **振り仮名** main button (if Tile Action is set to Text Direction), or dropdown ▾ → **Convert Layout…**
+2. Click the **振り仮名** main button (if Tile Action is set to Text Direction), or dropdown ▾ → **Text Direction…**
 3. The dialog shows each book's current direction. For a single vertical book it pre-selects **V → H** automatically.
 4. Choose target direction: **Horizontal** or **Vertical**
 5. Click **Convert**
@@ -160,23 +179,79 @@ What the converter handles automatically:
 | Colour | Meaning |
 |--------|---------|
 | **Black** ruby | Publisher-added (hand-verified, always trusted) |
-| **Blue** ruby | Auto-generated by pykakasi |
+| **Blue** ruby | Auto-generated by the plugin |
 
 ---
 
 ## Accuracy
 
+Accuracy depends on which engine you use.
+
+### Enhanced engine (built-in default)
+
 | Content | Typical accuracy |
 |---------|-----------------|
 | Common vocabulary | ~95% |
-| Literary / archaic vocab | ~85% |
+| Conjugated verb forms | ~85% |
+| Literary / archaic vocab | ~80% |
 | Place names | ~80% |
 | Character names (人名) | ~70% |
 | Creative readings (当て字) | Low — publisher ruby wins |
 
+### High-accuracy engine (SudachiPy)
+
+| Content | Typical accuracy |
+|---------|-----------------|
+| Common vocabulary | ~98% |
+| Conjugated verb forms | ~95% |
+| Literary / archaic vocab | ~90% |
+| Place names | ~85% |
+| Character names (人名) | ~75% |
+| Creative readings (当て字) | Low — publisher ruby wins |
+
+> Character names and creative readings (当て字) are inherently unpredictable — no open-source engine can reliably guess author-invented or culturally specific readings. Publisher-supplied ruby always takes priority over auto-generated readings for those words.
+
 ---
 
 ## Changelog
+
+### v1.6.1
+**New: JLPT level tracking**
+- The EPUB now stores which JLPT levels were used when annotating (`data-levels` in the CSS tag, alongside the existing engine ID)
+- Books already annotated with the exact same levels as your current selection are marked **Up to date** and their checkboxes are hidden automatically on dialog open
+- Two-line sub-info per book: line 1 shows language and publisher ruby count; line 2 (auto ruby books only) shows auto ruby count, levels used, and engine
+- Changing the JLPT selection via Customize immediately re-evaluates all books — previously done books whose stored levels no longer match become checkable again
+- The **Customize** link is disabled while processing runs and re-enabled on completion
+- After processing, done-book checkboxes hide and **Add Ruby** disables automatically — no close-and-reopen needed
+
+**Bug fixes**
+- Individual book checkboxes can now be toggled independently — the header checkbox no longer interfered when some books were already up to date
+- Book sub-info labels no longer wrap mid-line (e.g. "Japanese (日本語) ·" was splitting across lines)
+
+---
+
+### v1.6.0
+**New: Pluggable furigana engine architecture**
+- **Enhanced engine** (built-in, new default) — pre-processes conjugated verb forms before passing to pykakasi; fixes common passive/potential/causative misreadings without any download; replaces raw pykakasi as the baseline for all users
+- **High-accuracy engine** (optional ~40 MB download) — powered by SudachiPy; full morphological analysis; identifies dictionary forms and conjugation types before reading lookup; consistently accurate on literary and inflected vocabulary
+- Engine selection shown in the **Edit Ruby…** dialog with inline download, status, and version display
+- Engine ID stored in EPUB so the dialog can detect books processed with an older or different engine
+
+**UI improvements**
+- JLPT panel is now collapsible (rebuilt on each toggle — avoids Qt visibility bugs on macOS)
+- Full dialog scroll so expanding the JLPT panel never squeezes other content
+- Long book titles now wrap to a second line instead of being cut off; Status column stays fully visible
+- Non-Japanese books (Chinese, Korean) now appear in the S↔T dialog table (dimmed, no checkbox, "Not applicable") instead of being hidden from the list
+- Menu order: Edit Ruby → Convert Chinese S↔T → Text Direction
+- "Convert Layout" renamed to **Text Direction**
+
+---
+
+### v1.5.1
+- Settings modal is now resizable and scrollable — matches the Preferences entry point
+- Unchecking **Auto Add Ruby** in Settings now visually disables the annotation level checkboxes
+
+---
 
 ### v1.5.0
 **New: Tile Action — configurable main toolbar button**
@@ -226,7 +301,7 @@ What the converter handles automatically:
 
 ### v1.4.2
 - Added **📖 Open in Viewer** button to the S↔T and orientation dialogs (visible when a single book is selected)
-- Sub-info line in all dialogs now shows language and format (`Language · EPUB · Vertical/Horizontal` etc.)
+- Sub-info line in all dialogs now shows language and format
 
 ---
 
@@ -251,83 +326,28 @@ Settings are now configured inside Calibre via **Preferences → Plugins → Fur
 - **Auto Chinese conversion** — enable Simplified ↔ Traditional conversion on import; choose direction (S→T or T→S) and variant; syncs to `monitor_config.json` automatically on OK
 - **Auto add ruby** — enable furigana annotation on import for Japanese EPUBs; choose which JLPT levels (N1–N5 + Unlisted); syncs to `monitor_config.json` automatically on OK
 - Monitor status is shown at the top of the panel (running / not running)
-- "Show Instruction" button explains how to set up the monitor script
-
-**Bug fixes**
-- Settings dialog now reads the plugin JSON file directly (bypasses a Calibre JSONConfig caching issue that caused `keep_original` and `auto_ruby_enabled` to display with incorrect initial values)
-- `prefs['key']` (bracket access) is now used throughout `action.py` instead of `prefs.get('key', default)` to ensure Calibre's on-disk refresh is always triggered
-
----
-
-### v1.3.1
-**Bug fixes**
-- Header checkbox now correctly reflects checked state when a bulk dialog first opens
-- Sub-label (Vertical/Horizontal, Simplified/Traditional) now updates immediately after conversion when switching direction — previously required closing and reopening the dialog
-- Fixed deploy workflow: `setup_plugin.py` now auto-quits Calibre, copies the built zip, and relaunches — no manual reinstall needed
-
-**About dialog**
-- Redesigned as a scrollable dialog covering all three features: Edit Ruby, Convert Chinese S↔T, and Convert Layout
-- Convert Layout now correctly lists Japanese, Chinese, and Korean as supported languages
 
 ---
 
 ### v1.3.0
 **New: Simplified ↔ Traditional Chinese conversion**
 - New **繁 Convert Chinese S↔T…** toolbar menu command — converts EPUB, HTML, FB2, and TXT books between Simplified and Traditional Chinese in one click
-- Supports 8 OpenCC conversion variants: generic S↔T, Taiwan Traditional (正體 — `s2tw` / `s2twp` recommended), Hong Kong Traditional (港式繁體 — `s2hk`), and reverse T→S directions
-- Phrase-level variants (`s2twp`, `tw2sp`) for more accurate vocabulary conversion (e.g. 軟件→軟體); faster character-only variants also available
-- Auto-detects book script from EPUB metadata (`dc:language`) and content sampling — pre-selects applicable books and shows "Already Traditional / Already Simplified" for books that don't need conversion
-- Converts text nodes only — tags, attributes, CSS, and scripts are never modified
-- Optionally converts title and author metadata in the same pass
-- Tri-state select-all checkbox in the book list header; individual checkboxes hidden for non-applicable books
-- opencc-python-reimplemented bundled — no separate install needed
-
-**Build change**
-- `setup_plugin.py` now bundles `opencc` alongside `pykakasi` automatically
-
----
-
-### v1.2.1
-**New: CJK language detection**
-- Detects book language from EPUB metadata (`dc:language`) — Japanese, Chinese (Simplified/Traditional), or Korean
-- "Edit Ruby…" is disabled for Chinese and Korean books, where furigana doesn't apply
-- Per-document detection: HTML files that explicitly declare `lang="zh-*"` or `lang="ko-*"` are skipped during ruby annotation, so Chinese/Korean sections inside a primarily Japanese book are left untouched
-- Detected language is shown in the status dialog
+- 8 OpenCC conversion variants; opencc-python-reimplemented bundled
 
 ---
 
 ### v1.2.0
 **New: Vertical typography fixes for horizontal-origin EPUBs**
-
-When converting a horizontal EPUB to vertical layout, characters written for screen reading often render incorrectly in a vertical column. This release fixes all common cases automatically.
-
-**Tate-chu-yoko (upright inline sequences)**
-- Numbers (`1`–`9999`) and short Latin runs (`USB`, `iPhone`, `mvp`, `AI`) now render upright in the vertical column via `text-combine-upright`
-- Covers single-digit chapter numbers (`第1章`–`第9章`), two-digit page counts, four-digit years, and version numbers (`2.0`, `3.14`)
-- Fully reversible: converting back to horizontal unwraps all spans cleanly
-
-**Punctuation normalisation**
-- Western curly quotes (`"…"` `'…'`) converted to CJK corner brackets (`「…」` `『…』`)
-- Bare ASCII period (`.`) converted to ideographic full stop (`。`) — skips abbreviations like `e.g.` and decimals inside tate-chu-yoko spans
-- Tab characters used for horizontal layout alignment replaced with an ideographic space (`　`) to avoid vertical column gaps
-
-**Bug fix — text nodes after the first wrapped span were silently skipped**
-- Root cause: closing `</span>` has no `class` attribute, so `is_tcy_span` was always `False` on the closing side. The skip-depth incremented for every `<span class="tcy">` opening but never decremented, causing all text nodes after the first wrapped digit or Latin word to be ignored by the punctuation pass.
-- Fix: `tcy_span_depth` is now tracked as a separate counter — openings detected by class attribute, closings detected by tag name alone.
+- Tate-chu-yoko wrapping for numbers and short Latin runs
+- Punctuation normalisation (quotes, periods, tabs)
 
 ---
 
 ### v1.1.0
 **New: EPUB Layout Converter**
-- Added **↔ Convert Layout…** in the toolbar menu — converts any CJK EPUB between vertical (right-to-left columns) and horizontal text layout in one click
-- Handles CSS `writing-mode` across all stylesheets, OPF `page-progression-direction`, and inline styles
-- Preserves all publisher and auto-generated ruby annotations through the conversion
+- Added **↔ Text Direction…** in the toolbar menu — converts any CJK EPUB between vertical and horizontal text layout in one click
 
-**Toggle button positioning**
-- Toggle pill now appears **bottom-left** for vertical-text books and **bottom-right** for horizontal-text books
-- Position is baked into the EPUB at processing time (reliable across all readers and devices)
-- Detection covers `-webkit-writing-mode`, `-epub-writing-mode`, and legacy `tb-rl` syntax used by Japanese publishers, plus embedded `<style>` blocks and OPF `primary-writing-mode` metadata
-- Re-adding ruby or running Convert Layout always updates the button position to match the current layout
+---
 
 ### v1.0.0
 - Initial release: auto-generates furigana for Japanese EPUBs with JLPT-level filtering, publisher ruby preservation, and a 3-state viewer toggle (All / Publisher only / Off)
@@ -348,10 +368,12 @@ pip3 install pykakasi jaconv deprecated wrapt opencc-python-reimplemented --targ
 
 # Build FuriganaRuby.zip
 python3 setup_plugin.py
-# → outputs FuriganaRuby.zip (~2.4 MB)
+# → outputs FuriganaRuby.zip (~5.8 MB)
 ```
 
 Then install the zip into Calibre as described in the Installation section above.
+
+> The High-accuracy (SudachiPy) engine is downloaded separately via the **Edit Ruby…** dialog — it is not bundled in the zip due to its size (~40 MB).
 
 ---
 
@@ -366,26 +388,23 @@ The book may not contain CJK text, or all kanji are common (N5/N4) and those lev
 **Toggle has no visible effect**
 If a page has no auto-generated furigana (e.g. copyright/image pages), switching between *all* and *publisher* modes will look identical. Try a chapter page.
 
+**Wrong readings on verb forms (e.g. passive, potential)**
+This is a known limitation of the Enhanced engine for complex conjugations. Switch to the **High-accuracy engine** in the **Edit Ruby…** dialog — it uses full morphological analysis and handles conjugated forms correctly.
+
 **Wrong readings on names**
-pykakasi cannot know character-specific name readings. Publisher-supplied ruby (if present) is always used instead of the auto reading for those words.
+No open-source engine can reliably guess character-specific name readings. Publisher-supplied ruby (if present) is always used instead of the auto reading for those words.
 
 **Toggle button appears on the wrong side**
 The button should be bottom-left for vertical text and bottom-right for horizontal text. If it's on the wrong side, the book was processed with an older version of the plugin. Fix: open **Edit Ruby…**, untick all levels → **Apply**, then re-tick your levels → **Apply**. The position is recalculated on re-add.
 
 **After converting layout, toggle is still on the wrong side**
-Running **↔ Convert Layout…** updates the button position automatically. If you converted the EPUB by another tool outside Calibre, the position won't have been updated — fix it with a remove-then-re-add ruby cycle as above.
+Running **↔ Text Direction…** updates the button position automatically. If you converted the EPUB by another tool outside Calibre, the position won't have been updated — fix it with a remove-then-re-add ruby cycle as above.
 
 **Some numbers or Latin letters still appear sideways after converting to vertical**
-This is expected for books converted with v1.1.0 or earlier. Re-run **↔ Convert Layout…** with v1.2.0+ — the converter now wraps digits and Latin runs in `text-combine-upright` spans automatically. If a character still appears sideways after reconverting, it is likely inside a CSS `<style>` block (a CSS property value, not visible text) and is not actually rendered to the screen.
+This is expected for books converted with v1.1.0 or earlier. Re-run **↔ Text Direction…** with v1.2.0+ — the converter now wraps digits and Latin runs in `text-combine-upright` spans automatically.
 
 **Periods appear as sideways dashes in vertical text**
-The book was written for horizontal reading and uses ASCII `.` instead of the CJK ideographic full stop `。`. v1.2.0+ converts bare periods automatically during layout conversion. Re-run **↔ Convert Layout…** to apply the fix. Note: periods inside abbreviations (`e.g.`, `a.m.`) and decimal numbers (`2.0`) are intentionally preserved.
-
-**Extra vertical gaps in the table of contents after converting to vertical**
-The book uses tab characters for horizontal alignment in its TOC — a common horizontal-layout convention. v1.2.0+ replaces tabs with an ideographic space during conversion. Re-run **↔ Convert Layout…** to apply the fix.
-
-**Convert Layout produces no visible change**
-The book may already be in the target orientation, or the CSS uses a non-standard property that the converter doesn't recognise. Check: open the EPUB in Calibre's **Edit Book**, look at the main stylesheet for `writing-mode`. If it uses a custom wrapper class rather than `body`/`html`, the CSS transform still applies — reload the book in the viewer to see the effect.
+The book was written for horizontal reading and uses ASCII `.` instead of the CJK ideographic full stop `。`. v1.2.0+ converts bare periods automatically during layout conversion. Re-run **↔ Text Direction…** to apply the fix.
 
 ---
 
