@@ -112,6 +112,7 @@ SOURCE_FILES = [
     'chinese_engine.py',
     'config.py',
     'deps_loader.py',
+    'engine_registry.py',
     'furigana_engine.py',
     'jlpt_filter.py',
     'lang_detect.py',
@@ -121,7 +122,7 @@ SOURCE_FILES = [
     'viewer_inject.js',
     'viewer_plugin.py',
 ]
-SOURCE_DIRS = ['images']   # directories to include recursively
+SOURCE_DIRS = ['engines', 'images']   # directories to include recursively
 
 print("Building plugin zip with bundled dependencies...")
 

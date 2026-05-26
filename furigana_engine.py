@@ -66,11 +66,16 @@ class RubyAwareParser(HTMLParser):
 # Explicit display:ruby / writing-mode overrides break vertical-rl ruby.
 # Auto ruby uses <rb>…</rb><rt>…</rt> (no <rp>) to match publisher structure.
 
-def _make_ruby_css(btn_side='left'):
+def _make_ruby_css(btn_side='left', engine_id=None):
     """Return RUBY_CSS with the toggle button on 'left' (vertical) or 'right' (horizontal)."""
+    css = RUBY_CSS
     if btn_side == 'right':
-        return RUBY_CSS.replace('    left: 8px;\n', '    right: 8px;\n')
-    return RUBY_CSS
+        css = css.replace('    left: 8px;\n', '    right: 8px;\n')
+    if engine_id:
+        css = css.replace(
+            '<style id="furigana-ruby-css">',
+            f'<style id="furigana-ruby-css" data-engine="{engine_id}">')
+    return css
 
 
 RUBY_CSS = """<style id="furigana-ruby-css">
@@ -272,21 +277,27 @@ RUBY_JS = """<script id="furigana-ruby-js">
 """
 
 
-def inject_css_js(html, btn_side='left'):
+def inject_css_js(html, btn_side='left', engine_id=None):
     if 'id="furigana-ruby-css"' in html:
         # CSS already present (e.g. partial strip kept it).
-        # Update the button side in the existing embedded <style> block so
-        # a re-add after orientation change still gets the right position.
+        # Update button side and engine ID in the existing <style> block.
         opposite = 'right' if btn_side == 'left' else 'left'
         _s = re.compile(
             r'(<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*>)(.*?)(</style>)',
             re.DOTALL)
-        def _upd(m):
+        def _upd(m, _eid=engine_id):
+            tag = m.group(1)
+            if _eid:
+                if 'data-engine=' in tag:
+                    tag = re.sub(r'\bdata-engine=["\'][^"\']*["\']',
+                                 f'data-engine="{_eid}"', tag)
+                else:
+                    tag = tag.replace('>', f' data-engine="{_eid}">', 1)
             updated = re.sub(
                 rf'\b{opposite}\s*:\s*8px\s*;', f'{btn_side}: 8px;', m.group(2))
-            return m.group(1) + updated + m.group(3)
+            return tag + updated + m.group(3)
         return _s.sub(_upd, html)
-    css = _make_ruby_css(btn_side)
+    css = _make_ruby_css(btn_side, engine_id=engine_id)
     if '</head>' in html:
         html = html.replace('</head>', css + '</head>', 1)
     elif '<body' in html:
@@ -369,15 +380,43 @@ def _split_trailing_kana(orig, hira):
 
 # ── Conversion ────────────────────────────────────────────────────────────────
 
-def text_to_ruby_segments(text, annotate_levels=None):
+def text_to_ruby_segments(text, annotate_levels=None, engine=None):
     if not contains_kanji(text):
         return [('plain', text)]
-    kks = get_kakasi()
-    items = kks.convert(text)
+
     try:
         from calibre_plugins.furigana_ruby.jlpt_filter import word_needs_annotation
     except ImportError:
         from jlpt_filter import word_needs_annotation
+
+    if engine is not None:
+        # Use pluggable engine
+        try:
+            pairs = engine.tokenize(text)
+        except Exception:
+            pairs = None
+
+        if pairs is not None:
+            segments = []
+            for orig, hira in pairs:
+                if not orig:
+                    continue
+                if not contains_kanji(orig):
+                    segments.append(('plain', orig))
+                    continue
+                if not hira or orig == hira:
+                    segments.append(('plain', orig))
+                    continue
+                if not word_needs_annotation(orig, annotate_levels=annotate_levels):
+                    segments.append(('plain', orig))
+                    continue
+                segments.append(('ruby', orig, hira))
+            return segments
+        # Fall through to pykakasi on engine error
+
+    # Legacy pykakasi path (fallback)
+    kks = get_kakasi()
+    items = kks.convert(text)
     segments = []
     for item in items:
         orig = item.get('orig', '')
@@ -419,7 +458,8 @@ def segments_to_html(segments):
     return ''.join(parts)
 
 
-def inject_furigana_html(html_content, annotate_levels=None, btn_side='left'):
+def inject_furigana_html(html_content, annotate_levels=None, btn_side='left',
+                         engine=None):
     parser = RubyAwareParser()
     parser.feed(html_content)
     parts = []
@@ -430,9 +470,12 @@ def inject_furigana_html(html_content, annotate_levels=None, btn_side='left'):
             if not contains_kanji(content):
                 parts.append(content)
             else:
-                segs = text_to_ruby_segments(content, annotate_levels=annotate_levels)
+                segs = text_to_ruby_segments(content,
+                                             annotate_levels=annotate_levels,
+                                             engine=engine)
                 parts.append(segments_to_html(segs))
-    return inject_css_js(''.join(parts), btn_side=btn_side)
+    engine_id = engine.id if engine is not None else 'standard'
+    return inject_css_js(''.join(parts), btn_side=btn_side, engine_id=engine_id)
 
 
 def strip_auto_furigana_html(html_content):
@@ -550,13 +593,41 @@ def get_annotated_levels(epub_path):
     return levels_found
 
 
+def get_engine_id(epub_path):
+    """
+    Return the engine ID stored in the EPUB's furigana CSS tag, or None.
+    Returns 'standard', 'enhanced', 'high_accuracy', or None for old EPUBs.
+    """
+    import zipfile as _zf
+    pattern = re.compile(
+        r'<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*'
+        r'\bdata-engine=["\']([^"\']+)["\']')
+    try:
+        with _zf.ZipFile(epub_path, 'r') as zf:
+            for name in zf.namelist():
+                if not name.lower().endswith(('.xhtml', '.html', '.htm')):
+                    continue
+                try:
+                    txt = zf.read(name).decode('utf-8', errors='ignore')
+                    if 'id="furigana-ruby-css"' not in txt:
+                        continue
+                    m = pattern.search(txt)
+                    if m:
+                        return m.group(1)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
+
 # ── EPUB processor ────────────────────────────────────────────────────────────
 
 def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
-                      remove_levels=None, progress_callback=None):
+                      remove_levels=None, progress_callback=None, engine=None):
     import zipfile, os, tempfile, shutil
 
-    if mode == 'add':
+    if mode == 'add' and engine is None:
         init_kakasi()
 
     # Detect orientation once so every HTML file gets the correct button side.
@@ -625,7 +696,7 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                             else:
                                 text = inject_furigana_html(
                                     text, annotate_levels=annotate_levels,
-                                    btn_side=btn_side)
+                                    btn_side=btn_side, engine=engine)
                         elif remove_levels is not None:
                             text = strip_auto_furigana_by_levels(text, remove_levels)
                         else:

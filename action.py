@@ -50,6 +50,8 @@ prefs.defaults['s2t_variant']            = 's2twp'
 prefs.defaults['t2s_variant']            = 't2s'
 prefs.defaults['auto_ruby_enabled']      = False
 prefs.defaults['auto_ruby_levels']       = ['N1', 'N2', 'N3']
+prefs.defaults['manual_engine']          = 'enhanced'
+prefs.defaults['auto_engine']            = 'enhanced'
 
 _ALL_LEVELS = {'N1', 'N2', 'N3', 'N4', 'N5', 'unlisted'}
 
@@ -273,13 +275,14 @@ class FuriganaWorker(QThread):
     finished = pyqtSignal(bool, int, list, str)
 
     def __init__(self, epub_path, output_path, mode, annotate_levels,
-                 remove_levels=None):
+                 remove_levels=None, engine=None):
         super().__init__()
         self.epub_path       = epub_path
         self.output_path     = output_path
         self.mode            = mode
         self.annotate_levels = annotate_levels
         self.remove_levels   = remove_levels
+        self.engine          = engine
 
     def run(self):
         try:
@@ -289,6 +292,7 @@ class FuriganaWorker(QThread):
                 mode=self.mode,
                 annotate_levels=self.annotate_levels,
                 remove_levels=self.remove_levels,
+                engine=self.engine,
                 progress_callback=lambda c, t, n:
                     self.progress.emit(c, t, os.path.basename(n)),
             )
@@ -310,9 +314,10 @@ class BulkFuriganaWorker(QThread):
     book_finished = pyqtSignal(int, bool, int, str)
     finished      = pyqtSignal(bool, list, str)
 
-    def __init__(self, tasks):
+    def __init__(self, tasks, engine=None):
         super().__init__()
-        self.tasks = tasks
+        self.tasks  = tasks
+        self.engine = engine
 
     def run(self):
         try:
@@ -343,7 +348,8 @@ class BulkFuriganaWorker(QThread):
                         al    = None if to_add >= _ALL_LEVELS else to_add
                         tmp_a = tempfile.mktemp(suffix='.epub')
                         _, cnt, _ = process_epub_file(src, tmp_a, mode='add',
-                                                      annotate_levels=al)
+                                                      annotate_levels=al,
+                                                      engine=self.engine)
                         ruby_delta += cnt
                         if tmp_r:
                             try: os.unlink(tmp_r)
@@ -392,13 +398,13 @@ class FuriganaAction(InterfaceAction):
         a1.triggered.connect(self.open_ruby_dialog)
         self.menu.addAction(a1)
 
-        a2 = QAction('↔ Convert Layout…', self.gui)
-        a2.triggered.connect(self.open_orientation_dialog)
-        self.menu.addAction(a2)
-
         a_zh = QAction('繁 Convert Chinese S↔T…', self.gui)
         a_zh.triggered.connect(self.open_chinese_dialog)
         self.menu.addAction(a_zh)
+
+        a2 = QAction('↔ Text Direction…', self.gui)
+        a2.triggered.connect(self.open_orientation_dialog)
+        self.menu.addAction(a2)
 
         self.menu.addSeparator()
 
@@ -608,6 +614,14 @@ class FuriganaAction(InterfaceAction):
             from furigana_engine import get_annotated_levels
         return get_annotated_levels(path)
 
+    def _get_engine_id(self, path):
+        """Return the engine ID stored in the EPUB, or None for old EPUBs."""
+        try:
+            from calibre_plugins.furigana_ruby.furigana_engine import get_engine_id
+        except ImportError:
+            from furigana_engine import get_engine_id
+        return get_engine_id(path)
+
     # ── Entry point ───────────────────────────────────────────────
 
     def open_main_dialog(self):
@@ -668,21 +682,24 @@ class FuriganaAction(InterfaceAction):
                     auto_count, pub_count, _ = self._scan_epub(epub_path)
                 except Exception:
                     auto_count = pub_count = 0
-                current_levels = self._get_annotated_levels(epub_path)
+                current_levels   = self._get_annotated_levels(epub_path)
+                stored_engine_id = self._get_engine_id(epub_path) if auto_count else None
             else:
                 auto_count = pub_count = 0
-                current_levels = set()
+                current_levels   = set()
+                stored_engine_id = None
 
             book_rows.append({
-                'book_id':        book_id,
-                'title':          title,
-                'epub':           epub_path,
-                'lang_info':      lang_info,
-                'lang_label':     lang_label,
-                'ruby_allowed':   ruby_allowed,
-                'auto_count':     auto_count,
-                'pub_count':      pub_count,
-                'current_levels': current_levels,
+                'book_id':          book_id,
+                'title':            title,
+                'epub':             epub_path,
+                'lang_info':        lang_info,
+                'lang_label':       lang_label,
+                'ruby_allowed':     ruby_allowed,
+                'auto_count':       auto_count,
+                'pub_count':        pub_count,
+                'current_levels':   current_levels,
+                'stored_engine_id': stored_engine_id,
             })
 
         eligible_rows = [r for r in book_rows if r['ruby_allowed']]
@@ -704,19 +721,41 @@ class FuriganaAction(InterfaceAction):
         dlg = QDialog(self.gui)
         dlg.setWindowTitle('Furigana (Ruby) Customization')
         dlg.setMinimumWidth(700)
-        dlg.setMinimumHeight(520)
-        dlg.resize(720, 660)
+        dlg.setMinimumHeight(400)
+        dlg.resize(720, 620)
 
         vl = QVBoxLayout()
         vl.setSpacing(6)
         dlg.setLayout(vl)
 
+        # All content except the button row goes into a single scroll area —
+        # same pattern as the Settings modal. This way expanding the JLPT panel
+        # scrolls the whole dialog instead of squeezing sibling widgets.
+        main_widget = QWidget()
+        main_vl = QVBoxLayout(main_widget)
+        main_vl.setContentsMargins(0, 0, 0, 0)
+        main_vl.setSpacing(6)
+        main_scroll = QScrollArea()
+        main_scroll.setWidgetResizable(True)
+        main_scroll.setWidget(main_widget)
+        try:
+            main_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            main_scroll.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            main_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        except AttributeError:
+            main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            main_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            main_scroll.setFrameShape(QFrame.NoFrame)
+        vl.addWidget(main_scroll)
+
         # Description — line 1 fixed, line 2 depends on keep_original
         desc1 = QLabel(
-            'Add/Update the Furigana (Ruby) to ebooks based on the selected JLPT '
-            'levels. Publisher furigana is always preserved.')
+            'Add/Update the Furigana (Ruby) to ebooks based on the selected JLPT levels.<br>'
+            'Publisher furigana is always preserved.')
         desc1.setWordWrap(True)
-        vl.addWidget(desc1)
+        main_vl.addWidget(desc1)
 
         if prefs['keep_original']:
             desc2_text = ('* A copy of the original file will be saved based on '
@@ -726,7 +765,7 @@ class FuriganaAction(InterfaceAction):
                           'your plugin Settings.')
         desc2 = QLabel(desc2_text)
         desc2.setWordWrap(True)
-        vl.addWidget(desc2)
+        main_vl.addWidget(desc2)
 
         sep = QFrame()
         try:
@@ -735,158 +774,316 @@ class FuriganaAction(InterfaceAction):
         except AttributeError:
             sep.setFrameShape(QFrame.HLine)
             sep.setFrameShadow(QFrame.Sunken)
-        vl.addWidget(sep)
+        main_vl.addWidget(sep)
 
         # ── JLPT collapsible panel ────────────────────────────────
-        saved_levels        = set(prefs['annotate_levels'])
-        level_cbs           = {}
-        _pre_expand_levels  = [None]
+        # level_checked is the persistent source of truth for checkbox state.
+        # level_cbs is rebuilt fresh each time the expanded view is shown,
+        # and cleared when collapsed. This avoids ALL Qt visibility issues:
+        # no hide/show/setMaximumHeight — we simply replace the panel content.
+        saved_levels       = set(prefs['annotate_levels'])
+        level_checked      = {l: (l in saved_levels)
+                              for l in ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']}
+        level_cbs          = {}   # populated only while expanded
+        _pre_expand_levels = [None]
 
         _LEVEL_ORDER = ['N1', 'N2', 'N3', 'N4', 'N5', 'unlisted']
 
         def _current_sel_text():
-            checked = [l for l in _LEVEL_ORDER
-                       if level_cbs.get(l, QCheckBox()).isChecked()]
+            checked = [l for l in _LEVEL_ORDER if level_checked.get(l, False)]
             return 'Current Selection: ' + (', '.join(checked) if checked else 'None')
 
-        # Collapsed view
-        collapsed_container = QWidget()
-        coll_vl = QVBoxLayout()
-        coll_vl.setContentsMargins(0, 0, 0, 0)
-        coll_vl.setSpacing(2)
+        def _sync_from_cbs():
+            for l, cb in level_cbs.items():
+                level_checked[l] = cb.isChecked()
 
-        coll_hdr_hl = QHBoxLayout()
-        coll_hdr_hl.setContentsMargins(0, 0, 0, 0)
-        coll_hdr_hl.setSpacing(6)
-        coll_title = QLabel('<b>JLPT Levels Configuration</b>')
-        btn_customize = QPushButton('Customize')
-        btn_customize.setFlat(True)
         _link_style = ('color: #0066cc; text-decoration: underline; '
                        'border: none; padding: 0;')
-        btn_customize.setStyleSheet(_link_style)
+
+        # Single container always in vl. We rebuild its content on each toggle
+        # instead of hiding widgets — the only approach that works reliably in
+        # Calibre's PyQt6 on macOS (visibility/size constraints are all unreliable).
+        jlpt_panel = QWidget()
+        jlpt_vl    = QVBoxLayout()
+        jlpt_vl.setContentsMargins(0, 0, 0, 0)
+        jlpt_vl.setSpacing(0)
+        jlpt_panel.setLayout(jlpt_vl)
+        main_vl.addWidget(jlpt_panel)
+
+        def _clear_jlpt():
+            """Remove and hide all content in jlpt_vl, then schedule deletion.
+
+            hide() is critical: takeAt() removes from the layout but the widget
+            remains a child of jlpt_panel and will still render unless explicitly
+            hidden. deleteLater() is deferred; without hide() the old widget
+            overlaps the new content until the next event loop tick.
+            """
+            while jlpt_vl.count():
+                item = jlpt_vl.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.hide()        # suppress rendering immediately
+                    w.deleteLater() # destroy on next event-loop tick
+
+        def _build_collapsed():
+            level_cbs.clear()
+            _clear_jlpt()
+
+            wrap = QWidget()
+            wvl  = QVBoxLayout()
+            wvl.setContentsMargins(0, 0, 0, 2)
+            wvl.setSpacing(2)
+
+            hdr_w  = QWidget()
+            hdr_hl = QHBoxLayout(hdr_w)
+            hdr_hl.setContentsMargins(0, 0, 0, 0)
+            hdr_hl.setSpacing(6)
+            hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
+            btn_cust = QPushButton('Customize')
+            btn_cust.setFlat(True)
+            btn_cust.setStyleSheet(_link_style)
+            try:
+                btn_cust.setCursor(Qt.CursorShape.PointingHandCursor)
+            except AttributeError:
+                btn_cust.setCursor(Qt.PointingHandCursor)
+            btn_cust.clicked.connect(_build_expanded)
+            hdr_hl.addWidget(btn_cust)
+            hdr_hl.addStretch()
+
+            sel_lbl = QLabel(_current_sel_text())
+            sel_lbl.setStyleSheet('color: #545454;')
+
+            wvl.addWidget(hdr_w)
+            wvl.addWidget(sel_lbl)
+            wrap.setLayout(wvl)
+            jlpt_vl.addWidget(wrap)
+
+        def _build_expanded():
+            _pre_expand_levels[0] = {l for l, v in level_checked.items() if v}
+            _clear_jlpt()
+
+            frame = QFrame()
+            exp_vl = QVBoxLayout()
+            exp_vl.setContentsMargins(8, 6, 8, 6)
+            exp_vl.setSpacing(4)
+
+            exp_hdr_hl = QHBoxLayout()
+            exp_hdr_hl.setContentsMargins(0, 0, 0, 0)
+            exp_hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
+            btn_save_levels = QPushButton('Save')
+            btn_save_levels.setFlat(True)
+            btn_save_levels.setStyleSheet(_link_style)
+            try:
+                btn_save_levels.setCursor(Qt.CursorShape.PointingHandCursor)
+            except AttributeError:
+                btn_save_levels.setCursor(Qt.PointingHandCursor)
+            btn_x = QPushButton('✕')
+            btn_x.setFlat(True)
+            btn_x.setFixedSize(18, 18)
+            btn_x.setStyleSheet(
+                'color: #545454; border: none; padding: 0; font-size: 12px;')
+            try:
+                btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
+            except AttributeError:
+                btn_x.setCursor(Qt.PointingHandCursor)
+            exp_hdr_hl.addWidget(btn_save_levels)
+            exp_hdr_hl.addStretch()
+            exp_hdr_hl.addWidget(btn_x)
+            exp_vl.addLayout(exp_hdr_hl)
+
+            level_cbs.clear()
+            for level, label, bold in [
+                ('N1',       'N1  —  Rare literary kanji',              True),
+                ('N2',       'N2  —  Advanced kanji',                   True),
+                ('N3',       'N3  —  Intermediate kanji  ★',            True),
+                ('N4',       'N4  —  Basic kanji  (学、週、料理…)',      False),
+                ('N5',       'N5  —  Elementary kanji  (日、人、山…)',   False),
+                ('unlisted', 'Unlisted  —  Kanji not in any JLPT list',  False),
+            ]:
+                cb = QCheckBox(label)
+                cb.setChecked(level_checked.get(level, False))
+                if bold:
+                    f = cb.font(); f.setBold(True); cb.setFont(f)
+                level_cbs[level] = cb
+                exp_vl.addWidget(cb)
+
+            quick_hl = QHBoxLayout()
+            quick_hl.addWidget(QLabel('Quick select:'))
+            for qlabel, qlevels in [
+                ('None',    set()),
+                ('N1',      {'N1'}),
+                ('N1–N2',   {'N1', 'N2'}),
+                ('N1–N3 ★', {'N1', 'N2', 'N3'}),
+                ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
+                ('N1–N5',   {'N1', 'N2', 'N3', 'N4', 'N5'}),
+                ('All',     _ALL_LEVELS),
+            ]:
+                qbtn = QPushButton(qlabel)
+                qbtn.setFixedHeight(26)
+                qbtn.clicked.connect(
+                    lambda _, lvls=qlevels:
+                        [cb.setChecked(lvl in lvls) for lvl, cb in level_cbs.items()])
+                quick_hl.addWidget(qbtn)
+            quick_hl.addStretch()
+            exp_vl.addLayout(quick_hl)
+
+            grp_note = QLabel('Publisher ruby is never modified. '
+                              'Changes only affect auto-generated (blue) ruby.')
+            grp_note.setWordWrap(True)
+            exp_vl.addWidget(grp_note)
+            frame.setLayout(exp_vl)
+            jlpt_vl.addWidget(frame)
+
+            def _on_save():
+                _sync_from_cbs()
+                prefs['annotate_levels'] = sorted(
+                    l for l, v in level_checked.items() if v)
+                _build_collapsed()
+
+            def _on_cancel():
+                prev = _pre_expand_levels[0] or set()
+                for l in _LEVEL_ORDER:
+                    level_checked[l] = l in prev
+                _build_collapsed()
+
+            btn_save_levels.clicked.connect(_on_save)
+            btn_x.clicked.connect(_on_cancel)
+
+        _build_collapsed()
+
+        # ── Furigana engine ───────────────────────────────────────
+        eng_sep = QFrame()
         try:
-            btn_customize.setCursor(Qt.CursorShape.PointingHandCursor)
+            eng_sep.setFrameShape(QFrame.Shape.HLine)
+            eng_sep.setFrameShadow(QFrame.Shadow.Sunken)
         except AttributeError:
-            btn_customize.setCursor(Qt.PointingHandCursor)
-        coll_hdr_hl.addWidget(coll_title)
-        coll_hdr_hl.addWidget(btn_customize)
-        coll_hdr_hl.addStretch()
+            eng_sep.setFrameShape(QFrame.HLine)
+            eng_sep.setFrameShadow(QFrame.Sunken)
+        main_vl.addWidget(eng_sep)
 
-        current_sel_lbl = QLabel('')
-        current_sel_lbl.setStyleSheet('color: #545454;')
+        eng_lbl = QLabel('<b>Furigana engine</b>')
+        main_vl.addWidget(eng_lbl)
 
-        coll_vl.addLayout(coll_hdr_hl)
-        coll_vl.addWidget(current_sel_lbl)
-        collapsed_container.setLayout(coll_vl)
-        vl.addWidget(collapsed_container)
+        eng_container = QWidget()
+        eng_vl = QVBoxLayout(eng_container)
+        eng_vl.setContentsMargins(0, 0, 0, 0)
+        eng_vl.setSpacing(4)
 
-        # Expanded panel (hidden by default)
-        expanded_panel = QFrame()
+        rb_enhanced = QRadioButton('Enhanced (built-in)')
+        rb_high     = QRadioButton('High-accuracy (SudachiPy)')
+        current_engine_pref = prefs['manual_engine']
+        rb_enhanced.setChecked(current_engine_pref != 'high_accuracy')
+        rb_high.setChecked(current_engine_pref == 'high_accuracy')
+
+        eng_vl.addWidget(rb_enhanced)
+
+        # High-accuracy row: radio + dynamic status/button
+        high_row = QHBoxLayout()
+        high_row.setContentsMargins(0, 0, 0, 0)
+        high_row.setSpacing(8)
+        high_row.addWidget(rb_high)
+
         try:
-            expanded_panel.setFrameShape(QFrame.Shape.StyledPanel)
-            expanded_panel.setFrameShadow(QFrame.Shadow.Raised)
-        except AttributeError:
-            expanded_panel.setFrameShape(QFrame.StyledPanel)
-            expanded_panel.setFrameShadow(QFrame.Raised)
-        expanded_panel.setStyleSheet(
-            'QFrame { border: 1px solid #b0b0b0; border-radius: 3px; }')
-        exp_vl = QVBoxLayout()
-        exp_vl.setContentsMargins(8, 6, 8, 6)
-        exp_vl.setSpacing(4)
+            from calibre_plugins.furigana_ruby.engines.sudachi import (
+                get_status, SudachiStatus, get_version)
+        except ImportError:
+            from engines.sudachi import get_status, SudachiStatus, get_version
 
-        exp_hdr_hl = QHBoxLayout()
-        exp_hdr_hl.setContentsMargins(0, 0, 0, 0)
-        exp_hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
-        btn_save_levels = QPushButton('Save')
-        btn_save_levels.setFlat(True)
-        btn_save_levels.setStyleSheet(_link_style)
-        try:
-            btn_save_levels.setCursor(Qt.CursorShape.PointingHandCursor)
-        except AttributeError:
-            btn_save_levels.setCursor(Qt.PointingHandCursor)
-        btn_x = QPushButton('✕')
-        btn_x.setFlat(True)
-        btn_x.setFixedSize(18, 18)
-        btn_x.setStyleSheet('color: #545454; border: none; padding: 0; font-size: 12px;')
-        try:
-            btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
-        except AttributeError:
-            btn_x.setCursor(Qt.PointingHandCursor)
-        exp_hdr_hl.addWidget(btn_save_levels)
-        exp_hdr_hl.addStretch()
-        exp_hdr_hl.addWidget(btn_x)
-        exp_vl.addLayout(exp_hdr_hl)
+        _sudachi_status = [None]   # mutable cell updated after download
+        _sudachi_ver    = [None]
 
-        for level, label, bold in [
-            ('N1',       'N1  —  Rare literary kanji',              True),
-            ('N2',       'N2  —  Advanced kanji',                   True),
-            ('N3',       'N3  —  Intermediate kanji  ★',            True),
-            ('N4',       'N4  —  Basic kanji  (学、週、料理…)',      False),
-            ('N5',       'N5  —  Elementary kanji  (日、人、山…)',   False),
-            ('unlisted', 'Unlisted  —  Kanji not in any JLPT list',  False),
-        ]:
-            cb = QCheckBox(label)
-            cb.setChecked(level in saved_levels)
-            if bold:
-                f = cb.font(); f.setBold(True); cb.setFont(f)
-            level_cbs[level] = cb
-            exp_vl.addWidget(cb)
+        def _refresh_sudachi_status():
+            status, ver = get_status()
+            _sudachi_status[0] = status
+            _sudachi_ver[0]    = ver
+            return status, ver
 
-        quick_hl = QHBoxLayout()
-        quick_hl.addWidget(QLabel('Quick select:'))
-        for qlabel, qlevels in [
-            ('None',    set()),
-            ('N1',      {'N1'}),
-            ('N1–N2',   {'N1', 'N2'}),
-            ('N1–N3 ★', {'N1', 'N2', 'N3'}),
-            ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
-            ('N1–N5',   {'N1', 'N2', 'N3', 'N4', 'N5'}),
-            ('All',     _ALL_LEVELS),
-        ]:
-            qbtn = QPushButton(qlabel)
-            qbtn.setFixedHeight(26)
-            qbtn.clicked.connect(
-                lambda _, lvls=qlevels:
-                    [cb.setChecked(lvl in lvls) for lvl, cb in level_cbs.items()])
-            quick_hl.addWidget(qbtn)
-        quick_hl.addStretch()
-        exp_vl.addLayout(quick_hl)
+        status, ver = _refresh_sudachi_status()
 
-        grp_note = QLabel('<small><i>Publisher ruby is never modified. '
-                          'Changes only affect auto-generated (blue) ruby.</i></small>')
-        grp_note.setWordWrap(True)
-        exp_vl.addWidget(grp_note)
-        expanded_panel.setLayout(exp_vl)
-        expanded_panel.setVisible(False)
-        vl.addWidget(expanded_panel)
+        eng_status_lbl = QLabel()
+        eng_status_lbl.setStyleSheet('color: #666; font-size: 11px;')
+        eng_dl_btn = QPushButton()
+        eng_dl_btn.setMaximumWidth(160)
 
-        # Expand / collapse helpers
-        def _expand():
-            _pre_expand_levels[0] = {lvl for lvl, cb in level_cbs.items()
-                                     if cb.isChecked()}
-            collapsed_container.setVisible(False)
-            expanded_panel.setVisible(True)
+        _download_thread = [None]
 
-        def _collapse_save():
-            prefs['annotate_levels'] = sorted(
-                lvl for lvl, cb in level_cbs.items() if cb.isChecked())
-            current_sel_lbl.setText(_current_sel_text())
-            expanded_panel.setVisible(False)
-            collapsed_container.setVisible(True)
+        def _update_engine_ui():
+            s = _sudachi_status[0]
+            v = _sudachi_ver[0]
+            if s == SudachiStatus.READY:
+                eng_status_lbl.setText(f'SudachiPy {v} · ready' if v else 'ready')
+                eng_dl_btn.setText('Re-download')
+                eng_dl_btn.setVisible(True)
+                eng_warn_lbl.setVisible(rb_high.isChecked())
+            elif s == SudachiStatus.CALIBRE_UPDATED:
+                eng_status_lbl.setText('Unavailable — Calibre updated')
+                eng_dl_btn.setText('Re-download to restore')
+                eng_dl_btn.setVisible(True)
+                eng_warn_lbl.setVisible(False)
+            elif s == SudachiStatus.BROKEN:
+                eng_status_lbl.setText('Unavailable')
+                eng_dl_btn.setText('Re-download')
+                eng_dl_btn.setVisible(True)
+                eng_warn_lbl.setVisible(False)
+            else:  # NOT_DOWNLOADED
+                eng_status_lbl.setText('Not downloaded (~40 MB)')
+                eng_dl_btn.setText('Download')
+                eng_dl_btn.setVisible(True)
+                eng_warn_lbl.setVisible(False)
 
-        def _collapse_cancel():
-            prev = _pre_expand_levels[0] or set()
-            for lvl, cb in level_cbs.items():
-                cb.setChecked(lvl in prev)
-            expanded_panel.setVisible(False)
-            collapsed_container.setVisible(True)
+        high_row.addWidget(eng_status_lbl)
+        high_row.addWidget(eng_dl_btn)
+        high_row.addStretch()
+        eng_vl.addLayout(high_row)
 
-        btn_customize.clicked.connect(_expand)
-        btn_save_levels.clicked.connect(_collapse_save)
-        btn_x.clicked.connect(_collapse_cancel)
+        eng_warn_lbl = QLabel('⚠ First annotation adds ~2–3 s to load the engine')
+        eng_warn_lbl.setStyleSheet('color: #b85c00; font-size: 11px; padding-left: 20px;')
+        eng_vl.addWidget(eng_warn_lbl)
 
-        # Initialise the collapsed label now that level_cbs is built
-        current_sel_lbl.setText(_current_sel_text())
+        main_vl.addWidget(eng_container)
+        _update_engine_ui()
+
+        # Save engine pref when radio changes
+        def _on_engine_changed():
+            prefs['manual_engine'] = (
+                'high_accuracy' if rb_high.isChecked() else 'enhanced')
+            _update_engine_ui()
+
+        rb_enhanced.toggled.connect(_on_engine_changed)
+        rb_high.toggled.connect(_on_engine_changed)
+
+        # Download thread
+        class _DownloadThread(QThread):
+            done = pyqtSignal(bool, str)
+            def run(self_t):
+                try:
+                    try:
+                        from calibre_plugins.furigana_ruby.engines.sudachi import install
+                    except ImportError:
+                        from engines.sudachi import install
+                    install()
+                    self_t.done.emit(True, '')
+                except Exception as e:
+                    self_t.done.emit(False, str(e))
+
+        def _on_download():
+            eng_dl_btn.setEnabled(False)
+            eng_status_lbl.setText('Downloading… (may take a minute)')
+            t = _DownloadThread()
+            _download_thread[0] = t
+
+            def _on_done(ok, err):
+                _refresh_sudachi_status()
+                eng_dl_btn.setEnabled(True)
+                if ok:
+                    _update_engine_ui()
+                else:
+                    eng_status_lbl.setText(f'Download failed: {err[:60]}')
+                    eng_dl_btn.setVisible(True)
+            t.done.connect(_on_done)
+            t.start()
+
+        eng_dl_btn.clicked.connect(_on_download)
 
         # ── Book list header ──────────────────────────────────────
         hdr_widget = QWidget()
@@ -990,10 +1187,18 @@ class FuriganaAction(InterfaceAction):
             if not row['ruby_allowed']:
                 status_lbl.setStyleSheet('color: #959595;')
 
+            _ENG_SHORT = {
+                'standard':      'Standard',
+                'enhanced':      'Enhanced',
+                'high_accuracy': 'High-accuracy',
+            }
             if row['ruby_allowed']:
                 sub_text = (f'{row["lang_label"]} · '
                             f'Publisher: {row["pub_count"]:,} · '
                             f'Auto: {row["auto_count"]:,}')
+                eid = row.get('stored_engine_id')
+                if eid:
+                    sub_text += f' · Engine: {_ENG_SHORT.get(eid, eid)}'
             else:
                 sub_text = f'{row["lang_label"]} · EPUB'
 
@@ -1030,7 +1235,7 @@ class FuriganaAction(InterfaceAction):
 
         list_layout.addStretch()
         scroll.setWidget(list_widget)
-        vl.addWidget(table_container)
+        main_vl.addWidget(table_container)
 
         # Summary result panel
         result_te = QTextEdit()
@@ -1038,7 +1243,7 @@ class FuriganaAction(InterfaceAction):
         result_te.setMinimumHeight(120)
         result_te.setSizePolicy(sp_pol.Expanding, sp_pol.Expanding)
         result_te.setPlainText(_selection_summary())
-        vl.addWidget(result_te)
+        main_vl.addWidget(result_te)
 
         # ── Buttons ───────────────────────────────────────────────
         btn_row_hl = QHBoxLayout()
@@ -1114,7 +1319,10 @@ class FuriganaAction(InterfaceAction):
 
         # ── Apply handler ─────────────────────────────────────────
         def _on_apply():
-            checked_levels = {lvl for lvl, cb in level_cbs.items() if cb.isChecked()}
+            # Sync live checkboxes → level_checked (no-op if panel is collapsed)
+            _sync_from_cbs()
+            checked_levels = {l for l, v in level_checked.items() if v}
+            preferred      = prefs['manual_engine']
 
             tasks = []
             for row in book_rows:
@@ -1123,12 +1331,21 @@ class FuriganaAction(InterfaceAction):
                     continue
                 to_add    = checked_levels - row['current_levels']
                 to_remove = row['current_levels'] - checked_levels
-                if to_add or to_remove:
+                # Engine mismatch with no level change → full remove + re-add.
+                # Also triggers when engine is unknown (old EPUBs processed before
+                # v1.6.0 that don't carry an engine ID in the CSS tag).
+                engine_changed = (
+                    not to_add and not to_remove
+                    and bool(row['current_levels'])
+                    and (row.get('stored_engine_id') is None
+                         or row['stored_engine_id'] != preferred)
+                )
+                if to_add or to_remove or engine_changed:
                     tasks.append({
                         'book_id':        row['book_id'],
                         'epub':           row['epub'],
-                        'to_add':         to_add,
-                        'to_remove':      to_remove,
+                        'to_add':         row['current_levels'] if engine_changed else to_add,
+                        'to_remove':      row['current_levels'] if engine_changed else to_remove,
                         'current_levels': row['current_levels'],
                     })
 
@@ -1140,6 +1357,118 @@ class FuriganaAction(InterfaceAction):
 
             prefs['annotate_levels'] = sorted(checked_levels)
 
+            # Resolve engine — if preferred engine unavailable, fall back
+            preferred = prefs['manual_engine']
+            try:
+                from calibre_plugins.furigana_ruby.engine_registry import (
+                    resolve_engine, _ensure_all_registered)
+                _ensure_all_registered()
+            except ImportError:
+                from engine_registry import resolve_engine, _ensure_all_registered
+                _ensure_all_registered()
+
+            # Handle download-in-progress case
+            if (_download_thread[0] is not None
+                    and _download_thread[0].isRunning()
+                    and preferred == 'high_accuracy'):
+                _show_download_in_progress_dialog(checked_levels, tasks)
+                return
+
+            resolved_engine, actual_engine_id = resolve_engine(preferred)
+            _run_bulk(tasks, checked_levels, resolved_engine, actual_engine_id,
+                      preferred)
+
+        def _show_download_in_progress_dialog(checked_levels, tasks):
+            from calibre.gui2 import question_dialog
+            dlg2 = QDialog(dlg)
+            dlg2.setWindowTitle('Engine downloading')
+            dlg2.setMinimumWidth(380)
+            v2 = QVBoxLayout(dlg2)
+            v2.addWidget(QLabel(
+                'The high-accuracy engine is still downloading.'))
+            v2.addSpacing(4)
+            rb_wait = QRadioButton('Wait for download, then annotate')
+            rb_now  = QRadioButton('Use Enhanced engine for this run')
+            rb_now.setChecked(True)
+            v2.addWidget(rb_wait)
+            v2.addWidget(rb_now)
+            v2.addSpacing(8)
+            bb2 = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Cancel |
+                QDialogButtonBox.StandardButton.Ok
+                if PYQT6 else
+                QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+            bb2.accepted.connect(dlg2.accept)
+            bb2.rejected.connect(dlg2.reject)
+            v2.addWidget(bb2)
+            if (dlg2.exec() if PYQT6 else dlg2.exec_()) != QDialog.DialogCode.Accepted if PYQT6 else QDialog.Accepted:
+                return
+            if rb_wait.isChecked():
+                # Wait for download, then annotate
+                def _on_dl_done(ok, err):
+                    _refresh_sudachi_status()
+                    _update_engine_ui()
+                    if ok:
+                        from calibre_plugins.furigana_ruby.engine_registry import (
+                            resolve_engine, _ensure_all_registered)
+                        _ensure_all_registered()
+                        eng, eid = resolve_engine('high_accuracy')
+                        _run_bulk(tasks, checked_levels, eng, eid, 'high_accuracy')
+                    else:
+                        _show_download_failed_dialog(checked_levels, tasks, err)
+                _download_thread[0].done.connect(_on_dl_done)
+            else:
+                from calibre_plugins.furigana_ruby.engine_registry import (
+                    resolve_engine, _ensure_all_registered)
+                _ensure_all_registered()
+                eng, eid = resolve_engine('enhanced')
+                _run_bulk(tasks, checked_levels, eng, eid, 'enhanced',
+                          fallback_note='(High-accuracy was downloading)')
+
+        def _show_download_failed_dialog(checked_levels, tasks, err=''):
+            dlg3 = QDialog(dlg)
+            dlg3.setWindowTitle('Download failed')
+            dlg3.setMinimumWidth(380)
+            v3 = QVBoxLayout(dlg3)
+            v3.addWidget(QLabel(
+                'Could not download the high-accuracy engine.\n'
+                'Check your internet connection and try again.'))
+            v3.addSpacing(4)
+            rb_retry   = QRadioButton('Retry download')
+            rb_enhanced = QRadioButton('Use Enhanced engine for this run')
+            rb_retry.setChecked(True)
+            v3.addWidget(rb_retry)
+            v3.addWidget(rb_enhanced)
+            v3.addSpacing(8)
+            bb3 = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Cancel |
+                QDialogButtonBox.StandardButton.Ok
+                if PYQT6 else
+                QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+            bb3.accepted.connect(dlg3.accept)
+            bb3.rejected.connect(dlg3.reject)
+            v3.addWidget(bb3)
+            if (dlg3.exec() if PYQT6 else dlg3.exec_()) != QDialog.DialogCode.Accepted if PYQT6 else QDialog.Accepted:
+                return
+            if rb_retry.isChecked():
+                _on_download()
+                _show_download_in_progress_dialog(checked_levels, tasks)
+            else:
+                from calibre_plugins.furigana_ruby.engine_registry import (
+                    resolve_engine, _ensure_all_registered)
+                _ensure_all_registered()
+                eng, eid = resolve_engine('enhanced')
+                _run_bulk(tasks, checked_levels, eng, eid, 'enhanced',
+                          fallback_note='(High-accuracy download failed)')
+
+        _ENGINE_DISPLAY = {
+            'high_accuracy': 'High-accuracy (SudachiPy)',
+            'enhanced':      'Enhanced (built-in)',
+            'standard':      'Standard (pykakasi)',
+        }
+
+        def _run_bulk(tasks, checked_levels, resolved_engine, actual_engine_id,
+                      preferred_id, fallback_note=''):
             _lock_controls()
             for row in book_rows:
                 cb = cb_map[row['book_id']]
@@ -1152,7 +1481,7 @@ class FuriganaAction(InterfaceAction):
             done    = [False]
             outcome = [None]
 
-            worker = BulkFuriganaWorker(tasks)
+            worker = BulkFuriganaWorker(tasks, engine=resolved_engine)
 
             def on_book_started(book_id):
                 sl = status_labels.get(book_id)
@@ -1218,16 +1547,21 @@ class FuriganaAction(InterfaceAction):
                     saved += 1
                     # Update in-memory state so re-apply works correctly
                     if row:
-                        row['current_levels'] = checked_levels.copy()
+                        row['current_levels']   = checked_levels.copy()
+                        row['stored_engine_id'] = actual_engine_id
                         sub_lbl = sub_labels.get(book_id)
                         if sub_lbl:
                             new_auto  = (row['auto_count'] + ruby_delta
                                          if ruby_delta >= 0 else max(0, row['auto_count'] + ruby_delta))
                             row['auto_count'] = new_auto
+                            _ES = {'standard': 'Standard',
+                                   'enhanced': 'Enhanced',
+                                   'high_accuracy': 'High-accuracy'}
+                            eng_part = f' · Engine: {_ES.get(actual_engine_id, actual_engine_id)}'
                             sub_lbl.setText(
                                 f'{row["lang_label"]} · '
                                 f'Publisher: {row["pub_count"]:,} · '
-                                f'Auto: {new_auto:,}')
+                                f'Auto: {new_auto:,}{eng_part}')
                 except Exception as e:
                     save_errors.append(f'Book {book_id}: save failed: {e}')
                     if sl:
@@ -1241,7 +1575,14 @@ class FuriganaAction(InterfaceAction):
             self.gui.library_view.model().refresh_ids(
                 [r[0] for r in results])
 
+            eng_label = _ENGINE_DISPLAY.get(actual_engine_id, actual_engine_id)
+            if actual_engine_id != preferred_id:
+                eng_label += f' (fell back from {_ENGINE_DISPLAY.get(preferred_id, preferred_id)})'
+            if fallback_note:
+                eng_label += f' {fallback_note}'
+
             lines = [f'✅ Saved {saved} book(s)']
+            lines.append(f'Engine: {eng_label}')
             if save_errors:
                 lines.append(f'⚠ {len(save_errors)} error(s):')
                 lines += [f'  {e}' for e in save_errors[:5]]
@@ -2796,6 +3137,13 @@ class FuriganaAction(InterfaceAction):
         vl.addWidget(bb)
         if (dlg.exec() if PYQT6 else dlg.exec_()):
             widget.save_settings()
+            # Sync action.py's in-memory prefs from what config.py just wrote to
+            # disk; without this, any subsequent prefs write (e.g. annotate_levels)
+            # would flush the old in-memory dict and overwrite the saved tile_action.
+            try:
+                prefs.refresh()
+            except Exception:
+                pass
             action = ('chinese'   if widget._rb_tile_zh.isChecked() else
                       'direction' if widget._rb_tile_dir.isChecked() else 'ruby')
             self._apply_tile_action(action)
@@ -2820,7 +3168,10 @@ class FuriganaAction(InterfaceAction):
             '(N5 &rarr; N1). Publisher-supplied ruby is never overwritten. '
             'Auto-generated ruby appears in <span style="color:#2b6fd4">blue</span>; '
             'use the in-viewer toggle (&#x1F233; / &#x1F4D6; / &#x1F21A;) to switch between '
-            'all, publisher-only, or hidden.</p>'
+            'all, publisher-only, or hidden. '
+            'Choose between two engines: <b>Enhanced</b> (built-in, no download required) or '
+            '<b>High-accuracy</b> (SudachiPy, ~40 MB optional download) for '
+            'morphology-aware readings with conjugation support.</p>'
             '<hr/>'
 
             '<p><b>繁 &mdash; Convert Chinese S&harr;T&hellip;</b>'
@@ -2836,7 +3187,7 @@ class FuriganaAction(InterfaceAction):
             'Text nodes only &mdash; tags, CSS, and scripts are never modified.</p>'
             '<hr/>'
 
-            '<p><b>&harr; &mdash; Convert Layout&hellip;</b>'
+            '<p><b>&harr; &mdash; Text Direction&hellip;</b>'
             '&nbsp;&nbsp;<span style="color:#545454;font-size:small;">Japanese &middot; Chinese &middot; Korean EPUBs</span></p>'
             '<p style="margin:0 0 0 12px;color:#333;">'
             'Switches the text direction between horizontal (左&rarr;右) and vertical (縦書き). '

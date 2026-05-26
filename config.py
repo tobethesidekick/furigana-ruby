@@ -14,14 +14,14 @@ try:
         QLineEdit, QFileDialog, QDialog, QDialogButtonBox, QTextBrowser,
         QSizePolicy,
     )
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal
     PYQT6 = True
 except ImportError:
     from PyQt5.Qt import (
         QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QGroupBox,
         QComboBox, QFrame, QRadioButton, QListWidget, QPushButton,
         QLineEdit, QFileDialog, QDialog, QDialogButtonBox, QTextBrowser,
-        QSizePolicy, Qt,
+        QSizePolicy, Qt, QThread, pyqtSignal,
     )
     PYQT6 = False
 
@@ -40,6 +40,8 @@ prefs.defaults['auto_chinese_direction']= 's2t'
 prefs.defaults['auto_ruby_enabled']     = False
 prefs.defaults['auto_ruby_levels']      = ['N1', 'N2', 'N3']
 prefs.defaults['monitor_config_path']   = ''
+prefs.defaults['manual_engine']         = 'enhanced'
+prefs.defaults['auto_engine']           = 'enhanced'
 
 
 JLPT_LEVELS = [
@@ -324,6 +326,7 @@ class ConfigWidget(QWidget):
         ruby_sub_container.setStyleSheet(
             'QCheckBox:disabled { color: #aaaaaa; }'
             ' QLabel:disabled { color: #aaaaaa; }'
+            ' QRadioButton:disabled { color: #aaaaaa; }'
         )
         ruby_sub = QVBoxLayout(ruby_sub_container)
         ruby_sub.setContentsMargins(20, 0, 0, 4)
@@ -345,6 +348,163 @@ class ConfigWidget(QWidget):
             cb.setChecked(level in saved_ruby_levels)
             self._ruby_level_cbs[level] = cb
             ruby_sub.addWidget(cb)
+
+        _sep(ruby_sub)
+
+        # Auto import engine (inside ruby sub so it disables with the checkbox)
+        auto_eng_hdr = QLabel('<b>Furigana engine</b>')
+        ruby_sub.addWidget(auto_eng_hdr)
+
+        self._rb_auto_enhanced = QRadioButton('Enhanced (built-in)')
+        self._rb_auto_high     = QRadioButton('High-accuracy (SudachiPy)')
+        auto_engine_pref = pj.get('auto_engine', 'enhanced')
+        self._rb_auto_enhanced.setChecked(auto_engine_pref != 'high_accuracy')
+        self._rb_auto_high.setChecked(auto_engine_pref == 'high_accuracy')
+        ruby_sub.addWidget(self._rb_auto_enhanced)
+
+        try:
+            from calibre_plugins.furigana_ruby.engines.sudachi import (
+                get_status as _s_get_status, SudachiStatus)
+        except ImportError:
+            from engines.sudachi import (
+                get_status as _s_get_status, SudachiStatus)
+
+        self._cfg_sudachi_status = [None]
+        self._cfg_sudachi_ver    = [None]
+
+        def _cfg_refresh_sudachi():
+            s, v = _s_get_status()
+            self._cfg_sudachi_status[0] = s
+            self._cfg_sudachi_ver[0]    = v
+            return s, v
+
+        _cfg_refresh_sudachi()
+
+        self._cfg_eng_status_lbl = QLabel()
+        self._cfg_eng_status_lbl.setStyleSheet('color: #666; font-size: 11px;')
+        self._cfg_eng_dl_btn = QPushButton()
+        self._cfg_eng_dl_btn.setMaximumWidth(160)
+
+        high_eng_row = QHBoxLayout()
+        high_eng_row.setContentsMargins(0, 0, 0, 0)
+        high_eng_row.setSpacing(8)
+        high_eng_row.addWidget(self._rb_auto_high)
+        high_eng_row.addWidget(self._cfg_eng_status_lbl)
+        high_eng_row.addWidget(self._cfg_eng_dl_btn)
+        high_eng_row.addStretch()
+        ruby_sub.addLayout(high_eng_row)
+
+        self._cfg_eng_remove_btn = QPushButton('Remove SudachiPy…')
+        self._cfg_eng_remove_btn.setFlat(True)
+        self._cfg_eng_remove_btn.setStyleSheet(
+            'QPushButton { color: #cc3300; border: none; '
+            'text-decoration: underline; font-size: 11px; }'
+            'QPushButton:hover { color: #990000; }')
+        try:
+            self._cfg_eng_remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            self._cfg_eng_remove_btn.setCursor(Qt.PointingHandCursor)
+        remove_eng_row = QHBoxLayout()
+        remove_eng_row.setContentsMargins(0, 0, 0, 0)
+        remove_eng_row.addWidget(self._cfg_eng_remove_btn)
+        remove_eng_row.addStretch()
+        ruby_sub.addLayout(remove_eng_row)
+
+        self._cfg_dl_thread = [None]
+
+        def _cfg_update_engine_ui():
+            s = self._cfg_sudachi_status[0]
+            v = self._cfg_sudachi_ver[0]
+            installed = s in (SudachiStatus.READY, SudachiStatus.BROKEN,
+                              SudachiStatus.CALIBRE_UPDATED)
+            if s == SudachiStatus.READY:
+                self._cfg_eng_status_lbl.setText(
+                    f'SudachiPy {v} · ready' if v else 'ready')
+                self._cfg_eng_dl_btn.setText('Re-download')
+            elif s == SudachiStatus.CALIBRE_UPDATED:
+                self._cfg_eng_status_lbl.setText('Unavailable — Calibre updated')
+                self._cfg_eng_dl_btn.setText('Re-download to restore')
+            elif s == SudachiStatus.BROKEN:
+                self._cfg_eng_status_lbl.setText('Unavailable')
+                self._cfg_eng_dl_btn.setText('Re-download')
+            else:
+                self._cfg_eng_status_lbl.setText('Not downloaded (~40 MB)')
+                self._cfg_eng_dl_btn.setText('Download')
+            self._cfg_eng_remove_btn.setVisible(installed)
+
+        _cfg_update_engine_ui()
+
+        class _CfgDownloadThread(QThread):
+            done = pyqtSignal(bool, str)
+            def run(self_t):
+                try:
+                    try:
+                        from calibre_plugins.furigana_ruby.engines.sudachi import install
+                    except ImportError:
+                        from engines.sudachi import install
+                    install()
+                    self_t.done.emit(True, '')
+                except Exception as e:
+                    self_t.done.emit(False, str(e))
+
+        def _cfg_on_download():
+            self._cfg_eng_dl_btn.setEnabled(False)
+            self._cfg_eng_status_lbl.setText('Downloading… (may take a minute)')
+            t = _CfgDownloadThread()
+            self._cfg_dl_thread[0] = t
+
+            def _on_done(ok, err):
+                _cfg_refresh_sudachi()
+                self._cfg_eng_dl_btn.setEnabled(True)
+                if ok:
+                    _cfg_update_engine_ui()
+                else:
+                    self._cfg_eng_status_lbl.setText(f'Download failed: {err[:60]}')
+            t.done.connect(_on_done)
+            t.start()
+
+        self._cfg_eng_dl_btn.clicked.connect(_cfg_on_download)
+
+        def _cfg_on_remove():
+            dlg_r = QDialog(self)
+            dlg_r.setWindowTitle('Remove SudachiPy?')
+            dlg_r.setMinimumWidth(400)
+            v_r = QVBoxLayout(dlg_r)
+            v_r.addWidget(QLabel(
+                'This will delete the SudachiPy engine (~40 MB).\n'
+                'Both manual and auto-import engine settings will revert\n'
+                'to Enhanced (built-in).'))
+            v_r.addSpacing(8)
+            rb_confirm = QRadioButton('Remove SudachiPy and revert to Enhanced')
+            rb_keep    = QRadioButton('Keep SudachiPy')
+            rb_keep.setChecked(True)
+            v_r.addWidget(rb_confirm)
+            v_r.addWidget(rb_keep)
+            v_r.addSpacing(8)
+            bb_r = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok |
+                QDialogButtonBox.StandardButton.Cancel
+                if PYQT6 else
+                QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            bb_r.accepted.connect(dlg_r.accept)
+            bb_r.rejected.connect(dlg_r.reject)
+            v_r.addWidget(bb_r)
+            accepted = (dlg_r.exec() if PYQT6 else dlg_r.exec_())
+            ok_code  = (QDialog.DialogCode.Accepted if PYQT6 else QDialog.Accepted)
+            if accepted != ok_code or not rb_confirm.isChecked():
+                return
+            try:
+                from calibre_plugins.furigana_ruby.engines.sudachi import remove
+            except ImportError:
+                from engines.sudachi import remove
+            remove()
+            prefs['auto_engine']   = 'enhanced'
+            prefs['manual_engine'] = 'enhanced'
+            self._rb_auto_enhanced.setChecked(True)
+            _cfg_refresh_sudachi()
+            _cfg_update_engine_ui()
+
+        self._cfg_eng_remove_btn.clicked.connect(_cfg_on_remove)
 
         imp_layout.addWidget(ruby_sub_container)
 
@@ -447,6 +607,9 @@ full Launch Agent plist template.</p>
 
         s2t_var = variant_val if chinese_dir == 's2t' else prefs.get('s2t_variant', 's2twp')
 
+        auto_engine = ('high_accuracy' if self._rb_auto_high.isChecked()
+                       else 'enhanced')
+
         # Save to JSONConfig (plugin reads this for manual operations)
         prefs['tile_action']            = tile_action
         prefs['keep_original']          = keep_orig
@@ -455,6 +618,7 @@ full Launch Agent plist template.</p>
         prefs['s2t_variant']            = s2t_var
         prefs['auto_ruby_enabled']      = ruby_on
         prefs['auto_ruby_levels']       = ruby_levels
+        prefs['auto_engine']            = auto_engine
 
         # Sync to monitor_config.json so the monitor script picks up changes
         if self._monitor_path:
