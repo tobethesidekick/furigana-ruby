@@ -215,6 +215,31 @@ Accuracy depends on which engine you use.
 
 ## Changelog
 
+### v1.7.0
+**New: Viewer toggle (optional)**
+- The in-viewer toggle button (🈳/📖/🈚) is now opt-in (default off). Enable it per-book run via the Options panel or as the auto-import default in Settings
+- The toggle setting is saved immediately when you click **Save** in the Options panel — no need to process a book first
+- Books with CSS but no toggle JS show **Toggle missing** in orange; running Add Ruby repairs them automatically
+
+**New: Options panel in Ruby dialog**
+- JLPT levels, Viewer toggle, and Furigana engine are consolidated into a single collapsible **Options** section
+- Collapsed state shows a one-line summary: `N1–N3 · Toggle in Viewer off · Enhanced`
+- **Customize** expands; **Save** commits all settings to prefs and collapses
+- Quick-select presets appear at the top of the levels list
+- Engine change now re-evaluates up-to-date books — books processed with a different engine reappear as processable
+
+**New: Plugin-wide logging & diagnostics**
+- A rolling log file (`furigana_ruby_log.txt`) is written automatically to Calibre's config directory — records plugin startup, processing results, settings saves, and SudachiPy downloads
+- **Check for Updates** dialog now includes a bug-report section: **Open Diagnosis** (full report preview), **Copy Diagnosis** (copies to clipboard), **Open Log Folder** (reveals log file selected in Finder/Explorer)
+
+**Bug fixes**
+- Fixed: after processing completes, book checkboxes were sometimes left in a disabled-but-visible state where direct clicks did nothing but the header checkbox still worked
+- Fixed: "Nothing to do" was incorrectly shown when the only needed action was injecting the viewer toggle JS into an already-annotated book
+- Fixed: SudachiPy health check and daemon startup on environments where Python warnings are treated as errors (`dict_type` deprecation now silenced correctly)
+- Fixed: SudachiPy subprocess encoding on Windows — all calls now use UTF-8 explicitly; Windows Python Launcher (`py`) tried first in discovery; console window no longer flashes
+
+---
+
 ### v1.6.2
 **Bug fixes**
 - **Settings not rendering correctly after save** — the Settings dialog now correctly reads saved values on all Calibre install types (portable, non-default location, Windows custom path). Previously, settings were saved correctly but the dialog always showed defaults on reopen due to a hardcoded config path that didn't account for non-standard installs

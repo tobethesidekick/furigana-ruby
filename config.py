@@ -42,6 +42,7 @@ prefs.defaults['auto_ruby_levels']      = ['N1', 'N2', 'N3']
 prefs.defaults['monitor_config_path']   = ''
 prefs.defaults['manual_engine']         = 'enhanced'
 prefs.defaults['auto_engine']           = 'enhanced'
+prefs.defaults['include_viewer_toggle'] = False
 
 
 JLPT_LEVELS = [
@@ -191,6 +192,7 @@ class ConfigWidget(QWidget):
 
         orig_note = QLabel('<small><i>ORIGINAL_EPUB copies appear in the book\'s format list and can be deleted individually.</i></small>')
         orig_note.setWordWrap(True)
+        orig_note.setContentsMargins(20, 0, 0, 0)   # align with label, past radio button
         mod_layout.addWidget(orig_note)
 
         mod_group.setLayout(mod_layout)
@@ -358,6 +360,23 @@ class ConfigWidget(QWidget):
 
         _sep(ruby_sub)
 
+        # Viewer toggle (between levels and engine, same indent as engine)
+        auto_toggle_hdr = QLabel('<b>Viewer toggle</b>')
+        ruby_sub.addWidget(auto_toggle_hdr)
+
+        toggle_note = QLabel(
+            'Cycles through: All selected levels · Publisher only · None')
+        toggle_note.setWordWrap(True)
+        toggle_note.setStyleSheet('color: #555;')
+        ruby_sub.addWidget(toggle_note)
+
+        self._viewer_toggle_cb = QCheckBox('Include toggle button in Calibre Viewer')
+        viewer_toggle_saved = pj.get('include_viewer_toggle', False)
+        self._viewer_toggle_cb.setChecked(viewer_toggle_saved)
+        ruby_sub.addWidget(self._viewer_toggle_cb)
+
+        _sep(ruby_sub)
+
         # Auto import engine (inside ruby sub so it disables with the checkbox)
         auto_eng_hdr = QLabel('<b>Furigana engine</b>')
         ruby_sub.addWidget(auto_eng_hdr)
@@ -514,6 +533,66 @@ class ConfigWidget(QWidget):
 
         self._cfg_eng_remove_btn.clicked.connect(_cfg_on_remove)
 
+        def _cfg_on_diagnostics_UNUSED():
+            self._cfg_diag_btn.setEnabled(False)
+            self._cfg_diag_btn.setText('Running…')
+            try:
+                from calibre_plugins.furigana_ruby.engines.sudachi import (
+                    generate_diagnostics)
+            except ImportError:
+                from engines.sudachi import generate_diagnostics
+            try:
+                report = generate_diagnostics()
+            except Exception as e:
+                report = f'Error generating diagnostics:\n{e}'
+            finally:
+                self._cfg_diag_btn.setEnabled(True)
+                self._cfg_diag_btn.setText('📋 Diagnostics…')
+
+            dlg_d = QDialog(self)
+            dlg_d.setWindowTitle('SudachiPy Diagnostics')
+            dlg_d.setMinimumWidth(560)
+            dlg_d.resize(600, 420)
+            v_d = QVBoxLayout(dlg_d)
+
+            info_lbl = QLabel(
+                'Copy this report and attach it to your bug ticket.')
+            info_lbl.setWordWrap(True)
+            v_d.addWidget(info_lbl)
+
+            tb = QTextBrowser()
+            tb.setPlainText(report)
+            tb.setFont(
+                tb.font().__class__(
+                    'Courier' if not PYQT6 else 'Courier New', 10))
+            v_d.addWidget(tb)
+
+            copy_btn = QPushButton('Copy to Clipboard')
+
+            def _do_copy():
+                try:
+                    from PyQt6.QtWidgets import QApplication
+                except ImportError:
+                    from PyQt5.Qt import QApplication
+                QApplication.clipboard().setText(report)
+                copy_btn.setText('✓ Copied!')
+
+            copy_btn.clicked.connect(_do_copy)
+            bb_d = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Close if PYQT6
+                else QDialogButtonBox.Close)
+            bb_d.rejected.connect(dlg_d.reject)
+
+            btn_row_d = QHBoxLayout()
+            btn_row_d.addWidget(copy_btn)
+            btn_row_d.addStretch()
+            btn_row_d.addWidget(bb_d)
+            v_d.addLayout(btn_row_d)
+
+            dlg_d.exec() if PYQT6 else dlg_d.exec_()
+
+        # (Diagnostics moved to About dialog)
+
         imp_layout.addWidget(ruby_sub_container)
 
         self._ruby_sub_container = ruby_sub_container
@@ -610,8 +689,9 @@ full Launch Agent plist template.</p>
         chinese_on    = self._chinese_cb.isChecked()
         chinese_dir   = 's2t' if self._rb_s2t.isChecked() else 't2s'
         variant_val   = self._variant_combo.currentData() or ''
-        ruby_on       = self._ruby_cb.isChecked()
-        ruby_levels   = [l for l, cb in self._ruby_level_cbs.items() if cb.isChecked()]
+        ruby_on         = self._ruby_cb.isChecked()
+        ruby_levels     = [l for l, cb in self._ruby_level_cbs.items() if cb.isChecked()]
+        viewer_toggle   = self._viewer_toggle_cb.isChecked()
 
         s2t_var = variant_val if chinese_dir == 's2t' else prefs.get('s2t_variant', 's2twp')
 
@@ -619,14 +699,15 @@ full Launch Agent plist template.</p>
                        else 'enhanced')
 
         # Save to JSONConfig (plugin reads this for manual operations)
-        prefs['tile_action']            = tile_action
-        prefs['keep_original']          = keep_orig
-        prefs['auto_chinese_enabled']   = chinese_on
-        prefs['auto_chinese_direction'] = chinese_dir
-        prefs['s2t_variant']            = s2t_var
-        prefs['auto_ruby_enabled']      = ruby_on
-        prefs['auto_ruby_levels']       = ruby_levels
-        prefs['auto_engine']            = auto_engine
+        prefs['tile_action']              = tile_action
+        prefs['keep_original']            = keep_orig
+        prefs['auto_chinese_enabled']     = chinese_on
+        prefs['auto_chinese_direction']   = chinese_dir
+        prefs['s2t_variant']              = s2t_var
+        prefs['auto_ruby_enabled']        = ruby_on
+        prefs['auto_ruby_levels']         = ruby_levels
+        prefs['include_viewer_toggle']    = viewer_toggle
+        prefs['auto_engine']              = auto_engine
 
         # Sync to monitor_config.json so the monitor script picks up changes
         if self._monitor_path:
@@ -643,6 +724,15 @@ full Launch Agent plist template.</p>
             mc['auto_ruby_enabled']      = ruby_on
             mc['auto_ruby_levels']       = ruby_levels
             _save_monitor_config(self._monitor_path, mc)
+
+        try:
+            from calibre_plugins.furigana_ruby.plugin_logger import logger as _lg
+        except ImportError:
+            from plugin_logger import logger as _lg
+        _lg.info(
+            f'Settings saved — tile={tile_action} keep_orig={keep_orig} '
+            f'ruby={ruby_on} levels={ruby_levels} toggle={viewer_toggle} '
+            f'engine={auto_engine} chinese={chinese_on}')
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

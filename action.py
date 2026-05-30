@@ -52,6 +52,7 @@ prefs.defaults['auto_ruby_enabled']      = False
 prefs.defaults['auto_ruby_levels']       = ['N1', 'N2', 'N3']
 prefs.defaults['manual_engine']          = 'enhanced'
 prefs.defaults['auto_engine']            = 'enhanced'
+prefs.defaults['include_viewer_toggle']  = False
 
 _ALL_LEVELS = {'N1', 'N2', 'N3', 'N4', 'N5', 'unlisted'}
 
@@ -339,10 +340,11 @@ class BulkFuriganaWorker(QThread):
     book_finished = pyqtSignal(int, bool, int, str)
     finished      = pyqtSignal(bool, list, str)
 
-    def __init__(self, tasks, engine=None):
+    def __init__(self, tasks, engine=None, include_toggle=True):
         super().__init__()
-        self.tasks  = tasks
-        self.engine = engine
+        self.tasks          = tasks
+        self.engine         = engine
+        self.include_toggle = include_toggle
 
     def run(self):
         try:
@@ -375,7 +377,8 @@ class BulkFuriganaWorker(QThread):
                         _, cnt, _ = process_epub_file(src, tmp_a, mode='add',
                                                       annotate_levels=al,
                                                       engine=self.engine,
-                                                      metadata_levels=task.get('final_levels'))
+                                                      metadata_levels=task.get('final_levels'),
+                                                      include_toggle=self.include_toggle)
                         ruby_delta += cnt
                         if tmp_r:
                             try: os.unlink(tmp_r)
@@ -415,6 +418,21 @@ class FuriganaAction(InterfaceAction):
                   if PYQT6 else 2)
 
     def genesis(self):
+        try:
+            try:
+                from calibre_plugins.furigana_ruby.plugin_logger import logger as _lg
+            except ImportError:
+                from plugin_logger import logger as _lg
+            try:
+                from calibre_plugins.furigana_ruby import FuriganaPluginBase
+                _ver = '.'.join(str(x) for x in FuriganaPluginBase.version)
+            except Exception:
+                _ver = '?'
+            import sys as _sys
+            _lg.info(f'Plugin loaded — v{_ver} on {_sys.platform}')
+        except Exception:
+            pass  # logging must never crash genesis()
+
         # ── Dropdown menu ──────────────────────────────────────────
         self.menu = QMenu(self.gui)
         self.qaction.setMenu(self.menu)
@@ -656,6 +674,19 @@ class FuriganaAction(InterfaceAction):
             from furigana_engine import get_stored_levels
         return get_stored_levels(path)
 
+    def _epub_has_toggle(self, path):
+        """Return True if the EPUB contains the viewer-toggle script tag."""
+        try:
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                for name in z.namelist():
+                    if name.lower().endswith(('.html', '.xhtml', '.htm')):
+                        if b'furigana-ruby-js' in z.read(name):
+                            return True
+        except Exception:
+            pass
+        return False
+
     # ── Entry point ───────────────────────────────────────────────
 
     def open_main_dialog(self):
@@ -719,11 +750,13 @@ class FuriganaAction(InterfaceAction):
                 current_levels   = self._get_annotated_levels(epub_path)
                 stored_engine_id = self._get_engine_id(epub_path) if auto_count else None
                 stored_levels    = self._get_stored_levels(epub_path)
+                has_toggle       = self._epub_has_toggle(epub_path) if auto_count else False
             else:
                 auto_count = pub_count = 0
                 current_levels   = set()
                 stored_engine_id = None
                 stored_levels    = None
+                has_toggle       = False
 
             book_rows.append({
                 'book_id':          book_id,
@@ -737,6 +770,7 @@ class FuriganaAction(InterfaceAction):
                 'current_levels':   current_levels,
                 'stored_engine_id': stored_engine_id,
                 'stored_levels':    stored_levels,
+                'has_toggle':       has_toggle,
             })
 
         eligible_rows = [r for r in book_rows if r['ruby_allowed']]
@@ -813,7 +847,11 @@ class FuriganaAction(InterfaceAction):
             sep.setFrameShadow(QFrame.Sunken)
         main_vl.addWidget(sep)
 
-        # ── JLPT collapsible panel ────────────────────────────────
+        # ── Options panel (JLPT + Toggle + Engine) ───────────────
+        # _incl_toggle: mutable cell so closures (_fmt_sub_text, _refresh_checks)
+        # can read the current state after the checkbox is toggled.
+        _incl_toggle = [bool(prefs.get('include_viewer_toggle', False))]
+
         # level_checked is the persistent source of truth for checkbox state.
         # level_cbs is rebuilt fresh each time the expanded view is shown,
         # and cleared when collapsed. This avoids ALL Qt visibility issues:
@@ -831,6 +869,27 @@ class FuriganaAction(InterfaceAction):
             checked = [l for l in _LEVEL_ORDER if level_checked.get(l, False)]
             return 'Current Selection: ' + (', '.join(checked) if checked else 'None')
 
+        def _fmt_levels_short():
+            """Format selected levels as 'N1–N3', 'N1, N3', 'All', or 'None'."""
+            checked = [l for l in _LEVEL_ORDER if level_checked.get(l, False)]
+            if not checked:
+                return 'None'
+            if checked == _LEVEL_ORDER:
+                return 'All'
+            # Check if consecutive from N1
+            _lvl_map = {'N1': 0, 'N2': 1, 'N3': 2, 'N4': 3, 'N5': 4, 'unlisted': 5}
+            idxs = [_lvl_map[l] for l in checked]
+            if idxs == list(range(len(idxs))):  # consecutive from N1
+                return f'{checked[0]}–{checked[-1]}'
+            return ', '.join(checked)
+
+        def _fmt_opts_summary():
+            lvl_part = _fmt_levels_short()
+            tog_part = 'Toggle in Viewer on' if _incl_toggle[0] else 'Toggle in Viewer off'
+            eng_pref = prefs['manual_engine']
+            eng_part = 'High-accuracy' if eng_pref == 'high_accuracy' else 'Enhanced'
+            return f'{lvl_part}  ·  {tog_part}  ·  {eng_part}'
+
         def _sync_from_cbs():
             for l, cb in level_cbs.items():
                 level_checked[l] = cb.isChecked()
@@ -838,15 +897,94 @@ class FuriganaAction(InterfaceAction):
         _link_style = ('color: #0066cc; text-decoration: underline; '
                        'border: none; padding: 0;')
 
-        # Single container always in vl. We rebuild its content on each toggle
-        # instead of hiding widgets — the only approach that works reliably in
-        # Calibre's PyQt6 on macOS (visibility/size constraints are all unreliable).
+        # ── Options header: [▶] Options  ·····  [Customize / Save] ──
+        _opts_expanded = [False]
+
+        opts_hdr_widget = QWidget()
+        opts_hdr_hl = QHBoxLayout(opts_hdr_widget)
+        opts_hdr_hl.setContentsMargins(0, 0, 0, 0)
+        opts_hdr_hl.setSpacing(6)
+
+        opts_arrow_btn = QPushButton('▶')
+        opts_arrow_btn.setFlat(True)
+        opts_arrow_btn.setFixedSize(18, 18)
+        opts_arrow_btn.setStyleSheet('border: none; padding: 0; font-size: 10px; color: #444;')
+        try:
+            opts_arrow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            opts_arrow_btn.setCursor(Qt.PointingHandCursor)
+
+        opts_title_lbl = QLabel('<b>Options</b>')
+
+        # Customize/Save link — changes label depending on state
+        opts_action_btn = QPushButton('Customize')
+        opts_action_btn.setFlat(True)
+        opts_action_btn.setStyleSheet(_link_style)
+        try:
+            opts_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        except AttributeError:
+            opts_action_btn.setCursor(Qt.PointingHandCursor)
+
+        opts_hdr_hl.addWidget(opts_arrow_btn)
+        opts_hdr_hl.addWidget(opts_title_lbl)
+        opts_hdr_hl.addWidget(opts_action_btn)
+        opts_hdr_hl.addStretch()
+        main_vl.addWidget(opts_hdr_widget)
+
+        # Summary line — shown when collapsed, indented to align with "Options" text
+        opts_summary_lbl = QLabel(_fmt_opts_summary())
+        opts_summary_lbl.setStyleSheet('color: #555; font-size: 12px; padding-left: 24px;')
+        main_vl.addWidget(opts_summary_lbl)
+
+        def _update_opts_summary():
+            opts_summary_lbl.setText(_fmt_opts_summary())
+
+        # ── Options content (indented 24px to align with "Options" text) ──
+        opts_content = QWidget()
+        opts_content_vl = QVBoxLayout(opts_content)
+        opts_content_vl.setContentsMargins(24, 4, 0, 0)
+        opts_content_vl.setSpacing(6)
+        opts_content.setVisible(False)
+        main_vl.addWidget(opts_content)
+
+        def _save_opts():
+            """Commit Options settings to prefs and collapse the panel."""
+            _sync_from_cbs()
+            prefs['annotate_levels']       = sorted(
+                l for l, v in level_checked.items() if v)
+            prefs['include_viewer_toggle'] = _incl_toggle[0]
+            # engine already saved immediately on radio change
+            _update_opts_summary()
+            _toggle_opts_panel()
+            _refresh_checks_ruby(preserve_status=False)
+
+        def _toggle_opts_panel():
+            expanded = not _opts_expanded[0]
+            _opts_expanded[0] = expanded
+            if expanded:
+                _build_expanded()   # populate JLPT checkboxes fresh
+            else:
+                _build_collapsed()  # clear JLPT checkboxes
+            opts_content.setVisible(expanded)
+            opts_summary_lbl.setVisible(not expanded)
+            opts_arrow_btn.setText('▼' if expanded else '▶')
+            opts_action_btn.setText('Save' if expanded else 'Customize')
+
+        opts_arrow_btn.clicked.connect(_toggle_opts_panel)
+        opts_title_lbl.mousePressEvent = lambda _: _toggle_opts_panel()
+        opts_action_btn.clicked.connect(
+            lambda: (_save_opts() if _opts_expanded[0] else _toggle_opts_panel()))
+
+        # ── JLPT panel (inside opts_content) ─────────────────────
+        # Single container always in opts_content_vl. We rebuild its content on
+        # each toggle instead of hiding widgets — the only approach that works
+        # reliably in Calibre's PyQt6 on macOS.
         jlpt_panel = QWidget()
         jlpt_vl    = QVBoxLayout()
         jlpt_vl.setContentsMargins(0, 0, 0, 0)
         jlpt_vl.setSpacing(0)
         jlpt_panel.setLayout(jlpt_vl)
-        main_vl.addWidget(jlpt_panel)
+        opts_content_vl.addWidget(jlpt_panel)
 
         def _clear_jlpt():
             """Remove and hide all content in jlpt_vl, then schedule deletion.
@@ -864,73 +1002,51 @@ class FuriganaAction(InterfaceAction):
                     w.deleteLater() # destroy on next event-loop tick
 
         def _build_collapsed():
+            """Rebuild JLPT panel in collapsed state (summary only, no controls)."""
             level_cbs.clear()
+            _clear_jlpt()
+            _cust_btn_ref[0] = None
+            # Nothing to show here — opts_content is hidden when collapsed,
+            # so the summary line on the Options header is the only visible state.
+
+        def _build_expanded():
+            """Rebuild JLPT panel in expanded state: quick-select at top, then checkboxes."""
+            _pre_expand_levels[0] = {l for l, v in level_checked.items() if v}
+            _cust_btn_ref[0] = None
             _clear_jlpt()
 
             wrap = QWidget()
-            wvl  = QVBoxLayout()
-            wvl.setContentsMargins(0, 0, 0, 2)
-            wvl.setSpacing(2)
+            wvl  = QVBoxLayout(wrap)
+            wvl.setContentsMargins(0, 0, 0, 0)
+            wvl.setSpacing(3)
 
-            hdr_w  = QWidget()
-            hdr_hl = QHBoxLayout(hdr_w)
-            hdr_hl.setContentsMargins(0, 0, 0, 0)
-            hdr_hl.setSpacing(6)
-            hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
-            btn_cust = QPushButton('Customize')
-            btn_cust.setFlat(True)
-            btn_cust.setStyleSheet(_link_style)
-            try:
-                btn_cust.setCursor(Qt.CursorShape.PointingHandCursor)
-            except AttributeError:
-                btn_cust.setCursor(Qt.PointingHandCursor)
-            btn_cust.clicked.connect(_build_expanded)
-            hdr_hl.addWidget(btn_cust)
-            _cust_btn_ref[0] = btn_cust
-            hdr_hl.addStretch()
+            # Section label
+            lbl = QLabel('<b>JLPT Levels</b>')
+            wvl.addWidget(lbl)
 
-            sel_lbl = QLabel(_current_sel_text())
-            sel_lbl.setStyleSheet('color: #545454;')
+            # Quick-select at the TOP (above checkboxes)
+            quick_hl = QHBoxLayout()
+            quick_hl.setSpacing(4)
+            quick_hl.addWidget(QLabel('Quick select:'))
+            for qlabel, qlevels in [
+                ('None',    set()),
+                ('N1',      {'N1'}),
+                ('N1–N2',   {'N1', 'N2'}),
+                ('N1–N3 ★', {'N1', 'N2', 'N3'}),
+                ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
+                ('N1–N5',   {'N1', 'N2', 'N3', 'N4', 'N5'}),
+                ('All',     _ALL_LEVELS),
+            ]:
+                qbtn = QPushButton(qlabel)
+                qbtn.setFixedHeight(24)
+                qbtn.clicked.connect(
+                    lambda _, lvls=qlevels:
+                        [cb.setChecked(lvl in lvls) for lvl, cb in level_cbs.items()])
+                quick_hl.addWidget(qbtn)
+            quick_hl.addStretch()
+            wvl.addLayout(quick_hl)
 
-            wvl.addWidget(hdr_w)
-            wvl.addWidget(sel_lbl)
-            wrap.setLayout(wvl)
-            jlpt_vl.addWidget(wrap)
-
-        def _build_expanded():
-            _pre_expand_levels[0] = {l for l, v in level_checked.items() if v}
-            _cust_btn_ref[0] = None   # collapsed widget about to be destroyed
-            _clear_jlpt()
-
-            frame = QFrame()
-            exp_vl = QVBoxLayout()
-            exp_vl.setContentsMargins(8, 6, 8, 6)
-            exp_vl.setSpacing(4)
-
-            exp_hdr_hl = QHBoxLayout()
-            exp_hdr_hl.setContentsMargins(0, 0, 0, 0)
-            exp_hdr_hl.addWidget(QLabel('<b>JLPT Levels Configuration</b>'))
-            btn_save_levels = QPushButton('Save')
-            btn_save_levels.setFlat(True)
-            btn_save_levels.setStyleSheet(_link_style)
-            try:
-                btn_save_levels.setCursor(Qt.CursorShape.PointingHandCursor)
-            except AttributeError:
-                btn_save_levels.setCursor(Qt.PointingHandCursor)
-            btn_x = QPushButton('✕')
-            btn_x.setFlat(True)
-            btn_x.setFixedSize(18, 18)
-            btn_x.setStyleSheet(
-                'color: #545454; border: none; padding: 0; font-size: 12px;')
-            try:
-                btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
-            except AttributeError:
-                btn_x.setCursor(Qt.PointingHandCursor)
-            exp_hdr_hl.addWidget(btn_save_levels)
-            exp_hdr_hl.addStretch()
-            exp_hdr_hl.addWidget(btn_x)
-            exp_vl.addLayout(exp_hdr_hl)
-
+            # Level checkboxes
             level_cbs.clear()
             for level, label, bold in [
                 ('N1',       'N1  —  Rare literary kanji',              True),
@@ -945,65 +1061,50 @@ class FuriganaAction(InterfaceAction):
                 if bold:
                     f = cb.font(); f.setBold(True); cb.setFont(f)
                 level_cbs[level] = cb
-                exp_vl.addWidget(cb)
+                wvl.addWidget(cb)
 
-            quick_hl = QHBoxLayout()
-            quick_hl.addWidget(QLabel('Quick select:'))
-            for qlabel, qlevels in [
-                ('None',    set()),
-                ('N1',      {'N1'}),
-                ('N1–N2',   {'N1', 'N2'}),
-                ('N1–N3 ★', {'N1', 'N2', 'N3'}),
-                ('N1–N4',   {'N1', 'N2', 'N3', 'N4'}),
-                ('N1–N5',   {'N1', 'N2', 'N3', 'N4', 'N5'}),
-                ('All',     _ALL_LEVELS),
-            ]:
-                qbtn = QPushButton(qlabel)
-                qbtn.setFixedHeight(26)
-                qbtn.clicked.connect(
-                    lambda _, lvls=qlevels:
-                        [cb.setChecked(lvl in lvls) for lvl, cb in level_cbs.items()])
-                quick_hl.addWidget(qbtn)
-            quick_hl.addStretch()
-            exp_vl.addLayout(quick_hl)
-
-            grp_note = QLabel('Publisher ruby is never modified. '
-                              'Changes only affect auto-generated (blue) ruby.')
-            grp_note.setWordWrap(True)
-            exp_vl.addWidget(grp_note)
-            frame.setLayout(exp_vl)
-            jlpt_vl.addWidget(frame)
-
-            def _on_save():
-                _sync_from_cbs()
-                prefs['annotate_levels'] = sorted(
-                    l for l, v in level_checked.items() if v)
-                _build_collapsed()
-                _refresh_checks_ruby(preserve_status=False)
-
-            def _on_cancel():
-                prev = _pre_expand_levels[0] or set()
-                for l in _LEVEL_ORDER:
-                    level_checked[l] = l in prev
-                _build_collapsed()
-
-            btn_save_levels.clicked.connect(_on_save)
-            btn_x.clicked.connect(_on_cancel)
+            jlpt_vl.addWidget(wrap)
 
         _build_collapsed()
 
-        # ── Furigana engine ───────────────────────────────────────
-        eng_sep = QFrame()
-        try:
-            eng_sep.setFrameShape(QFrame.Shape.HLine)
-            eng_sep.setFrameShadow(QFrame.Shadow.Sunken)
-        except AttributeError:
-            eng_sep.setFrameShape(QFrame.HLine)
-            eng_sep.setFrameShadow(QFrame.Sunken)
-        main_vl.addWidget(eng_sep)
+        # ── Viewer toggle (inside opts_content, between JLPT and engine) ──
+        def _make_sep_in(parent_vl):
+            ln = QFrame()
+            try:
+                ln.setFrameShape(QFrame.Shape.HLine)
+                ln.setFrameShadow(QFrame.Shadow.Sunken)
+            except AttributeError:
+                ln.setFrameShape(QFrame.HLine)
+                ln.setFrameShadow(QFrame.Sunken)
+            parent_vl.addWidget(ln)
+
+        _make_sep_in(opts_content_vl)
+
+        toggle_sec_lbl = QLabel('<b>Viewer toggle</b>')
+        opts_content_vl.addWidget(toggle_sec_lbl)
+
+        toggle_note_lbl = QLabel(
+            'Cycles through: All selected levels · Publisher only · None')
+        toggle_note_lbl.setWordWrap(True)
+        toggle_note_lbl.setStyleSheet('color: #555; font-size: 12px;')
+        opts_content_vl.addWidget(toggle_note_lbl)
+
+        incl_toggle_cb = QCheckBox('Include toggle button in Calibre Viewer')
+        incl_toggle_cb.setChecked(_incl_toggle[0])
+        opts_content_vl.addWidget(incl_toggle_cb)
+
+        def _on_toggle_changed(state):
+            _incl_toggle[0] = bool(state)
+            _update_opts_summary()
+            _refresh_checks_ruby(preserve_status=False)
+
+        incl_toggle_cb.stateChanged.connect(_on_toggle_changed)
+
+        # ── Furigana engine (inside opts_content) ─────────────────
+        _make_sep_in(opts_content_vl)
 
         eng_lbl = QLabel('<b>Furigana engine</b>')
-        main_vl.addWidget(eng_lbl)
+        opts_content_vl.addWidget(eng_lbl)
 
         eng_container = QWidget()
         eng_vl = QVBoxLayout(eng_container)
@@ -1081,14 +1182,17 @@ class FuriganaAction(InterfaceAction):
         eng_warn_lbl.setStyleSheet('color: #b85c00; font-size: 11px; padding-left: 20px;')
         eng_vl.addWidget(eng_warn_lbl)
 
-        main_vl.addWidget(eng_container)
+        opts_content_vl.addWidget(eng_container)
         _update_engine_ui()
 
         # Save engine pref when radio changes
         def _on_engine_changed():
             prefs['manual_engine'] = (
                 'high_accuracy' if rb_high.isChecked() else 'enhanced')
+            _update_opts_summary()
             _update_engine_ui()
+            # Re-evaluate up-to-date status — engine change may re-enable books
+            _refresh_checks_ruby(preserve_status=False)
 
         rb_enhanced.toggled.connect(_on_engine_changed)
         rb_high.toggled.connect(_on_engine_changed)
@@ -1125,6 +1229,16 @@ class FuriganaAction(InterfaceAction):
             t.start()
 
         eng_dl_btn.clicked.connect(_on_download)
+
+        # Separator between Options panel and book list
+        bk_sep = QFrame()
+        try:
+            bk_sep.setFrameShape(QFrame.Shape.HLine)
+            bk_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        except AttributeError:
+            bk_sep.setFrameShape(QFrame.HLine)
+            bk_sep.setFrameShadow(QFrame.Sunken)
+        main_vl.addWidget(bk_sep)
 
         # ── Book list header ──────────────────────────────────────
         hdr_widget = QWidget()
@@ -1211,6 +1325,13 @@ class FuriganaAction(InterfaceAction):
             eid = row.get('stored_engine_id')
             if eid:
                 parts2.append(f'Engine: {_ENG_SHORT.get(eid, eid)}')
+            # Toggle info: show only when JS is actually in the file, or when
+            # the user wants it but it is missing (so they can see the gap).
+            has_js = row.get('has_toggle', False)
+            if has_js:
+                parts2.append('Toggle: ✓')
+            elif _incl_toggle[0]:
+                parts2.append('Toggle: missing')
             return line1 + '\n' + ' · '.join(parts2)
 
         checkboxes    = []
@@ -1288,11 +1409,19 @@ class FuriganaAction(InterfaceAction):
         scroll.setWidget(list_widget)
         main_vl.addWidget(table_container)
 
-        # Summary result panel
+        # Summary result panel — auto-height, grows with content.
+        # Uses QTextEdit in read-only mode; document height is connected to
+        # the widget so it expands to fit rather than showing a scrollbar.
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setMinimumHeight(120)
-        result_te.setSizePolicy(sp_pol.Expanding, sp_pol.Expanding)
+        result_te.setMinimumHeight(40)
+        result_te.setMaximumHeight(200)
+        result_te.setSizePolicy(sp_pol.Preferred, sp_pol.Minimum)
+        result_te.document().contentsChanged.connect(
+            lambda: result_te.setFixedHeight(
+                min(200, max(40, int(result_te.document().size().height()) + 12))
+            )
+        )
         result_te.setPlainText(_selection_summary())
         main_vl.addWidget(result_te)
 
@@ -1301,7 +1430,7 @@ class FuriganaAction(InterfaceAction):
 
         btn_viewer = QPushButton('📖 Open in Viewer')
         btn_viewer.setMinimumWidth(150)
-        btn_viewer.setVisible(len(eligible_rows) == 1)
+        btn_viewer.setVisible(len(book_ids) == 1)
 
         btn_apply = QPushButton('Add Ruby')
         btn_apply.setMinimumWidth(90)
@@ -1315,10 +1444,16 @@ class FuriganaAction(InterfaceAction):
         vl.addLayout(btn_row_hl)
 
         # ── Header checkbox logic ─────────────────────────────────
+        # Track which applicable books are hidden as "up to date" explicitly,
+        # instead of relying on cb.isVisible() which returns False for all child
+        # widgets before dlg.exec() is called (Qt isVisible quirk — same reason
+        # the S↔T dialog uses an explicit applicable_ids set, not isVisible).
+        _up_to_date_bids = set()
+
         def _eligible_cbs():
-            # Only visible checkboxes — hidden means "up to date" or "not applicable"
+            # Applicable books that are NOT hidden as "up to date"
             return [cb_map[bid] for bid in applicable_ids
-                    if bid in cb_map and cb_map[bid].isVisible()]
+                    if bid in cb_map and bid not in _up_to_date_bids]
 
         def _update_apply_state():
             any_checked = any(cb.isChecked() for cb in _eligible_cbs())
@@ -1365,9 +1500,13 @@ class FuriganaAction(InterfaceAction):
 
         def _unlock_controls():
             header_cb.setEnabled(True)
+            # Re-enable ALL book checkboxes that were disabled by _lock_controls —
+            # mirror the same set it disables, not a filtered subset.
+            # Visibility (setVisible) already controls which books are actionable;
+            # leaving a checkbox disabled-but-visible causes it to appear interactive
+            # while silently ignoring clicks (only the header setChecked() bypasses it).
             for cb in checkboxes:
-                if cb.isVisible():
-                    cb.setEnabled(True)
+                cb.setEnabled(True)
             for lvl_cb in level_cbs.values():
                 lvl_cb.setEnabled(True)
             if _cust_btn_ref[0]:
@@ -1376,36 +1515,62 @@ class FuriganaAction(InterfaceAction):
 
         # ── Per-book up-to-date check ─────────────────────────────
         def _refresh_checks_ruby(preserve_status=False):
-            """Show/hide checkboxes based on stored levels vs current selection.
+            """Show/hide checkboxes and update status based on levels + toggle state.
 
             preserve_status=True  — keep '✅ Done' labels (called post-processing)
-            preserve_status=False — update status to 'Up to date' or clear it
-                                    (called when JLPT levels change)
+            preserve_status=False — update status to 'Up to date'/'Toggle missing'
+                                    or clear it (called on level/toggle changes)
             """
-            current_sel = {l for l, v in level_checked.items() if v}
+            current_sel  = {l for l, v in level_checked.items() if v}
+            want_toggle  = _incl_toggle[0]
             for row in book_rows:
                 if not row['ruby_allowed']:
                     continue
-                bid = row['book_id']
-                cb  = cb_map.get(bid)
-                sl  = status_labels.get(bid)
+                bid    = row['book_id']
+                cb     = cb_map.get(bid)
+                sl     = status_labels.get(bid)
+                sub_lb = sub_labels.get(bid)
                 if cb is None or sl is None:
                     continue
                 stored = row.get('stored_levels')
-                # stored is None → old EPUB, no data-levels tag → always processable
-                if stored is not None and stored == current_sel:
+                has_js = row.get('has_toggle', False)
+
+                # A book is "up to date" when:
+                #   • Ruby levels match current selection, AND
+                #   • Either toggle is off, or toggle JS is already in the file, AND
+                #   • Stored engine matches the currently selected engine
+                levels_match = (stored is not None and stored == current_sel)
+                toggle_ok    = (not want_toggle) or has_js
+                engine_match = (row.get('stored_engine_id') == prefs['manual_engine']
+                                or row.get('stored_engine_id') is None)
+
+                if levels_match and toggle_ok and engine_match:
+                    _up_to_date_bids.add(bid)
                     cb.setVisible(False)
                     cb.setChecked(False)
                     if not preserve_status:
                         sl.setText('Up to date')
                         sl.setStyleSheet('color: #545454;')
                 else:
-                    if not cb.isVisible():
-                        cb.setVisible(True)
+                    was_hidden = bid in _up_to_date_bids
+                    _up_to_date_bids.discard(bid)
+                    cb.setVisible(True)
+                    if was_hidden:
                         cb.setChecked(True)
                     if not preserve_status and not sl.text().startswith('⚠'):
-                        sl.setText('')
-                        sl.setStyleSheet('')
+                        # Show "Toggle missing" when levels match but JS is absent
+                        # and user wants toggle. Otherwise clear status.
+                        if levels_match and want_toggle and not has_js:
+                            sl.setText('Toggle missing')
+                            sl.setStyleSheet('color: #c05000; font-weight: bold;')
+                        else:
+                            sl.setText('')
+                            sl.setStyleSheet('')
+
+                # Update sub-info label to reflect current toggle preference
+                if sub_lb is not None:
+                    sub_lb.setText(_fmt_sub_text(row))
+
             _update_apply_state()
 
         # ── Apply handler ─────────────────────────────────────────
@@ -1431,12 +1596,23 @@ class FuriganaAction(InterfaceAction):
                     and (row.get('stored_engine_id') is None
                          or row['stored_engine_id'] != preferred)
                 )
-                if to_add or to_remove or engine_changed:
+                # Toggle repair: viewer toggle JS is missing and the user wants it.
+                # Re-run with current levels (no-op for ruby content) to trigger
+                # inject_css_js which adds the missing JS.
+                toggle_needed = (
+                    _incl_toggle[0]
+                    and not row.get('has_toggle', False)
+                    and not to_add and not to_remove and not engine_changed
+                    and bool(row['current_levels'])
+                )
+                if to_add or to_remove or engine_changed or toggle_needed:
+                    # force_rerun: re-annotate at current levels so inject_css_js fires
+                    force_rerun = engine_changed or toggle_needed
                     tasks.append({
                         'book_id':        row['book_id'],
                         'epub':           row['epub'],
-                        'to_add':         row['current_levels'] if engine_changed else to_add,
-                        'to_remove':      row['current_levels'] if engine_changed else to_remove,
+                        'to_add':         row['current_levels'] if force_rerun else to_add,
+                        'to_remove':      row['current_levels'] if force_rerun else to_remove,
                         'current_levels': row['current_levels'],
                         'final_levels':   checked_levels.copy(),
                     })
@@ -1444,7 +1620,7 @@ class FuriganaAction(InterfaceAction):
             if not tasks:
                 result_te.setPlainText(
                     '⚠ Nothing to do — selected books already match '
-                    'the chosen levels.\n\n' + _selection_summary())
+                    'the chosen levels and settings.\n\n' + _selection_summary())
                 return
 
             prefs['annotate_levels'] = sorted(checked_levels)
@@ -1561,6 +1737,13 @@ class FuriganaAction(InterfaceAction):
 
         def _run_bulk(tasks, checked_levels, resolved_engine, actual_engine_id,
                       preferred_id, fallback_note=''):
+            try:
+                from calibre_plugins.furigana_ruby.plugin_logger import logger as _lg
+            except ImportError:
+                from plugin_logger import logger as _lg
+            _lg.info(f'Ruby: starting {len(tasks)} book(s) — '
+                     f'levels={sorted(checked_levels)} engine={actual_engine_id} '
+                     f'toggle={_incl_toggle[0]}')
             _lock_controls()
             for row in book_rows:
                 cb = cb_map[row['book_id']]
@@ -1573,7 +1756,8 @@ class FuriganaAction(InterfaceAction):
             done    = [False]
             outcome = [None]
 
-            worker = BulkFuriganaWorker(tasks, engine=resolved_engine)
+            worker = BulkFuriganaWorker(tasks, engine=resolved_engine,
+                                        include_toggle=_incl_toggle[0])
 
             def on_book_started(book_id):
                 sl = status_labels.get(book_id)
@@ -1645,6 +1829,8 @@ class FuriganaAction(InterfaceAction):
                         row['current_levels']   = checked_levels.copy()
                         row['stored_levels']    = checked_levels.copy()
                         row['stored_engine_id'] = actual_engine_id
+                        # Toggle JS was either added or stripped depending on _incl_toggle
+                        row['has_toggle']       = _incl_toggle[0]
                         sub_lbl = sub_labels.get(book_id)
                         if sub_lbl:
                             sub_lbl.setText(_fmt_sub_text(row))
@@ -1674,6 +1860,11 @@ class FuriganaAction(InterfaceAction):
                 lines += [f'  {e}' for e in save_errors[:5]]
             lines += ['', _selection_summary()]
             result_te.setPlainText('\n'.join(lines))
+            if save_errors:
+                for e in save_errors:
+                    _lg.error(f'Ruby save error: {e}')
+            _lg.info(f'Ruby: done — saved={saved} errors={len(save_errors)} '
+                     f'engine={eng_label}')
             # Hide done-book checkboxes; re-enable any remaining processable books
             _refresh_checks_ruby(preserve_status=True)
             _unlock_controls()
@@ -1681,7 +1872,10 @@ class FuriganaAction(InterfaceAction):
         # ── Viewer button ─────────────────────────────────────────
         def _on_viewer():
             dlg.reject()
-            self._open_in_viewer(eligible_rows[0]['book_id'])
+            # If the single selected book is non-Japanese (no eligible_rows),
+            # still open it in the viewer — the button is shown for any 1-book selection.
+            vid = eligible_rows[0]['book_id'] if eligible_rows else book_ids[0]
+            self._open_in_viewer(vid)
 
         # Wire signals
         for cb in checkboxes:
@@ -2050,8 +2244,14 @@ class FuriganaAction(InterfaceAction):
         sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setMinimumHeight(120)
-        result_te.setSizePolicy(sp2.Expanding, sp2.Expanding)
+        result_te.setMinimumHeight(40)
+        result_te.setMaximumHeight(200)
+        result_te.setSizePolicy(sp2.Preferred, sp2.Minimum)
+        result_te.document().contentsChanged.connect(
+            lambda: result_te.setFixedHeight(
+                min(200, max(40, int(result_te.document().size().height()) + 12))
+            )
+        )
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
@@ -2717,8 +2917,14 @@ class FuriganaAction(InterfaceAction):
         sp2 = QSizePolicy.Policy if PYQT6 else QSizePolicy
         result_te = QTextEdit()
         result_te.setReadOnly(True)
-        result_te.setMinimumHeight(120)
-        result_te.setSizePolicy(sp2.Expanding, sp2.Expanding)
+        result_te.setMinimumHeight(40)
+        result_te.setMaximumHeight(200)
+        result_te.setSizePolicy(sp2.Preferred, sp2.Minimum)
+        result_te.document().contentsChanged.connect(
+            lambda: result_te.setFixedHeight(
+                min(200, max(40, int(result_te.document().size().height()) + 12))
+            )
+        )
         result_te.setPlainText(_selection_summary())
         vl.addWidget(result_te)
 
@@ -2727,7 +2933,7 @@ class FuriganaAction(InterfaceAction):
 
         btn_viewer_ch = QPushButton('📖 Open in Viewer')
         btn_viewer_ch.setMinimumWidth(150)
-        btn_viewer_ch.setVisible(n_chinese == 1)
+        btn_viewer_ch.setVisible(len(book_ids) == 1)
 
         ok_btn    = QPushButton('Apply')
         ok_btn.setMinimumWidth(90)
@@ -2938,7 +3144,10 @@ class FuriganaAction(InterfaceAction):
         ok_btn.clicked.connect(lambda: _on_apply())
         close_btn.clicked.connect(dlg.reject)
         btn_viewer_ch.clicked.connect(
-            lambda: (dlg.reject(), self._open_in_viewer(_chinese_book_ids[0])))
+            # Use the first Chinese book if available, otherwise the single selected book
+            # (which may be non-Chinese — the button shows for any 1-book selection).
+            lambda: (dlg.reject(), self._open_in_viewer(
+                _chinese_book_ids[0] if _chinese_book_ids else book_ids[0])))
 
         # Initial populate
         _refresh_variants()
@@ -3331,6 +3540,7 @@ class FuriganaAction(InterfaceAction):
         browser.setFrameShape(QFrame.Shape.NoFrame if PYQT6 else QFrame.NoFrame)
         vl.addWidget(browser)
 
+        # (Bug report section moved to Check for Updates dialog)
         try:
             std = QDialogButtonBox.StandardButton
             bb  = QDialogButtonBox(std.Ok)
@@ -3344,63 +3554,185 @@ class FuriganaAction(InterfaceAction):
     # ── Update check ──────────────────────────────────────────────
 
     def check_for_updates(self):
-        """
-        Query the GitHub releases API and compare with the installed version.
-        Shows a dialog with a download link if a newer release exists.
-        Uses only Python stdlib — no extra dependencies.
-        """
-        import json
+        """Query GitHub releases API and show a custom dialog with update status
+        and a bug-report section below."""
+        import json, sys as _sys
         from urllib.request import urlopen, Request
         from urllib.error   import URLError
         from calibre_plugins.furigana_ruby import FuriganaPluginBase
 
-        local     = FuriganaPluginBase.version           # e.g. (1, 2, 0)
-        local_str = '.'.join(str(x) for x in local)
-        api_url   = ('https://api.github.com/repos/'
-                     'tobethesidekick/furigana-ruby/releases/latest')
+        local        = FuriganaPluginBase.version
+        local_str    = '.'.join(str(x) for x in local)
+        api_url      = ('https://api.github.com/repos/'
+                        'tobethesidekick/furigana-ruby/releases/latest')
         releases_url = ('https://github.com/tobethesidekick/'
                         'furigana-ruby/releases/latest')
+        issues_url   = ('https://github.com/tobethesidekick/'
+                        'furigana-ruby/issues')
 
+        # ── Fetch update status ───────────────────────────────────
+        update_html = ''
         try:
             req  = Request(api_url,
                            headers={'User-Agent': 'FuriganaRuby-Calibre-Plugin'})
             resp = urlopen(req, timeout=10)
             data = json.loads(resp.read().decode('utf-8'))
-
-            tag       = data.get('tag_name', '').lstrip('v')   # "1.2.0"
+            tag       = data.get('tag_name', '').lstrip('v')
             parts     = [int(x) for x in tag.split('.') if x.isdigit()]
             remote    = tuple(parts[:3])
             remote_str = '.'.join(str(x) for x in remote)
             html_url  = data.get('html_url', releases_url)
-
             if remote > local:
-                info_dialog(
-                    self.gui, 'Update Available',
+                update_html = (
                     f'<h3>🎉 Update available: v{remote_str}</h3>'
-                    f'Installed version: v{local_str}<br><br>'
-                    f'<a href="{html_url}">Download v{remote_str} from GitHub</a><br><br>'
-                    f'<small>Download <b>FuriganaRuby.zip</b>, then install via<br>'
-                    f'Calibre → Preferences → Plugins → Load plugin from file.</small>',
-                    show=True)
+                    f'Installed: v{local_str}<br>'
+                    f'<a href="{html_url}">Download v{remote_str} from GitHub</a><br>'
+                    f'<small>Install via Calibre → Preferences → Plugins → '
+                    f'Load plugin from file.</small>')
             else:
-                info_dialog(
-                    self.gui, 'Up to Date',
+                update_html = (
                     f'<h3>✓ You are up to date</h3>'
-                    f'Installed: v{local_str}<br><br>'
-                    f'<a href="{releases_url}">View releases on GitHub</a>',
-                    show=True)
-
+                    f'Installed: v{local_str}<br>'
+                    f'<a href="{releases_url}">View releases on GitHub</a>')
         except URLError as e:
-            info_dialog(
-                self.gui, 'Update Check Failed',
-                f'<b>Could not reach GitHub.</b><br><br>'
-                f'{e}<br><br>'
-                f'Check your internet connection or visit<br>'
-                f'<a href="{releases_url}">GitHub releases</a> manually.',
-                show=True)
+            update_html = (
+                f'<b>Could not reach GitHub.</b><br>{e}<br>'
+                f'<a href="{releases_url}">Check GitHub manually</a>')
         except Exception as e:
-            info_dialog(
-                self.gui, 'Update Check Failed',
-                f'<b>Unexpected error:</b><br>{e}<br><br>'
-                f'<a href="{releases_url}">GitHub releases</a>',
-                show=True)
+            update_html = (
+                f'<b>Update check failed:</b><br>{e}<br>'
+                f'<a href="{releases_url}">GitHub releases</a>')
+
+        # ── Build custom dialog ───────────────────────────────────
+        dlg = QDialog(self.gui)
+        dlg.setWindowTitle('FuriganaRuby — Check for Updates')
+        dlg.setMinimumWidth(440)
+        vl = QVBoxLayout(dlg)
+        vl.setSpacing(8)
+        vl.setContentsMargins(16, 14, 16, 12)
+
+        # Update status
+        update_lbl = QTextBrowser()
+        update_lbl.setOpenExternalLinks(True)
+        update_lbl.setHtml(update_html)
+        update_lbl.setFrameShape(QFrame.Shape.NoFrame if PYQT6
+                                 else QFrame.NoFrame)
+        update_lbl.setMaximumHeight(110)
+        vl.addWidget(update_lbl)
+
+        # Separator
+        sep = QFrame()
+        try:
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setFrameShadow(QFrame.Shadow.Sunken)
+        except AttributeError:
+            sep.setFrameShape(QFrame.HLine)
+            sep.setFrameShadow(QFrame.Sunken)
+        vl.addWidget(sep)
+
+        # Bug report section
+        bug_lbl = QLabel('<b>Having an issue?</b>  Generate a report and attach '
+                         f'it to a <a href="{issues_url}">bug ticket</a>.')
+        bug_lbl.setOpenExternalLinks(True)
+        bug_lbl.setWordWrap(True)
+        vl.addWidget(bug_lbl)
+
+        bug_row = QHBoxLayout()
+        btn_open_diag = QPushButton('Open Diagnosis')
+        btn_copy_diag = QPushButton('Copy Diagnosis')
+        btn_open_log  = QPushButton('Open Log Folder')
+        bug_row.addWidget(btn_open_diag)
+        bug_row.addWidget(btn_copy_diag)
+        bug_row.addWidget(btn_open_log)
+        bug_row.addStretch()
+        vl.addLayout(bug_row)
+
+        def _open_diag():
+            try:
+                try:
+                    from calibre_plugins.furigana_ruby.diagnostics import (
+                        generate_report)
+                except ImportError:
+                    from diagnostics import generate_report
+                report = generate_report()
+            except Exception as e:
+                report = f'Error generating report:\n{e}'
+            prev = QDialog(dlg)
+            prev.setWindowTitle('Diagnostic Report')
+            prev.setMinimumWidth(560)
+            prev.resize(620, 440)
+            pv = QVBoxLayout(prev)
+            pv.addWidget(QLabel('Attach this report to your bug ticket:'))
+            tb = QTextEdit()
+            tb.setReadOnly(True)
+            tb.setPlainText(report)
+            tb.setFontFamily('Courier New')
+            tb.setFontPointSize(10)
+            pv.addWidget(tb)
+            cb2 = QPushButton('Copy to clipboard')
+            def _cp2():
+                QApplication.clipboard().setText(report)
+                cb2.setText('✓ Copied to clipboard!')
+            cb2.clicked.connect(_cp2)
+            try:
+                bb2 = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            except AttributeError:
+                bb2 = QDialogButtonBox(QDialogButtonBox.Close)
+            bb2.rejected.connect(prev.reject)
+            r2 = QHBoxLayout()
+            r2.addWidget(cb2); r2.addStretch(); r2.addWidget(bb2)
+            pv.addLayout(r2)
+            prev.exec() if PYQT6 else prev.exec_()
+
+        def _copy_diag():
+            try:
+                try:
+                    from calibre_plugins.furigana_ruby.diagnostics import (
+                        generate_report)
+                except ImportError:
+                    from diagnostics import generate_report
+                report = generate_report()
+                QApplication.clipboard().setText(report)
+                btn_copy_diag.setText('✓ Copied to clipboard!')
+            except Exception as e:
+                btn_copy_diag.setText(f'Error: {str(e)[:30]}')
+
+        def _open_log():
+            try:
+                try:
+                    from calibre_plugins.furigana_ruby.plugin_logger import (
+                        get_log_path)
+                except ImportError:
+                    from plugin_logger import get_log_path
+                log_path = get_log_path()
+                import subprocess as _sp
+                if _sys.platform == 'darwin':
+                    # -R reveals and selects the file in Finder
+                    _sp.run(['open', '-R', log_path])
+                elif _sys.platform == 'win32':
+                    # /select highlights the file in Explorer
+                    _sp.run(['explorer', f'/select,{log_path}'])
+                else:
+                    # Linux: best-effort — select not universally supported
+                    try:
+                        _sp.run(['nautilus', '--select', log_path])
+                    except FileNotFoundError:
+                        _sp.run(['xdg-open', os.path.dirname(log_path)])
+            except Exception as e:
+                from calibre.gui2 import warning_dialog
+                warning_dialog(self.gui, 'Open Log Folder',
+                               f'Could not open folder:\n{e}', show=True)
+
+        btn_open_diag.clicked.connect(_open_diag)
+        btn_copy_diag.clicked.connect(_copy_diag)
+        btn_open_log.clicked.connect(_open_log)
+
+        # OK button
+        try:
+            bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        except AttributeError:
+            bb = QDialogButtonBox(QDialogButtonBox.Ok)
+        bb.accepted.connect(dlg.accept)
+        vl.addWidget(bb)
+
+        dlg.exec() if PYQT6 else dlg.exec_()

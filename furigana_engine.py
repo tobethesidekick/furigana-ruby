@@ -281,10 +281,17 @@ RUBY_JS = """<script id="furigana-ruby-js">
 """
 
 
-def inject_css_js(html, btn_side='left', engine_id=None, levels=None):
+def inject_css_js(html, btn_side='left', engine_id=None, levels=None,
+                  include_toggle=True):
+    """Inject (or update) the plugin CSS and optionally the viewer-toggle JS.
+
+    include_toggle=True  → ensure RUBY_JS is present (inject if missing).
+    include_toggle=False → ensure RUBY_JS is absent (strip if present).
+    """
     if 'id="furigana-ruby-css"' in html:
-        # CSS already present (e.g. partial strip kept it).
-        # Update button side, engine ID, and levels in the existing <style> block.
+        # CSS already present (e.g. partial strip kept it, or annotated with an
+        # older version). Update button side, engine ID, and levels in the existing
+        # <style> block, then handle JS according to include_toggle.
         opposite = 'right' if btn_side == 'left' else 'left'
         _s = re.compile(
             r'(<style\b[^>]*id=["\']furigana-ruby-css["\'][^>]*>)(.*?)(</style>)',
@@ -307,26 +314,41 @@ def inject_css_js(html, btn_side='left', engine_id=None, levels=None):
             updated = re.sub(
                 rf'\b{opposite}\s*:\s*8px\s*;', f'{btn_side}: 8px;', m.group(2))
             return tag + updated + m.group(3)
-        return _s.sub(_upd, html)
-    css = _make_ruby_css(btn_side, engine_id=engine_id)
-    if '</head>' in html:
-        html = html.replace('</head>', css + '</head>', 1)
-    elif '<body' in html:
-        idx = html.index('<body')
-        html = html[:idx] + css + html[idx:]
+        html = _s.sub(_upd, html)
     else:
-        html = css + html
-    if '</body>' in html:
-        html = html.replace('</body>', RUBY_JS + '</body>', 1)
-    else:
-        html += RUBY_JS
+        css = _make_ruby_css(btn_side, engine_id=engine_id, levels=levels)
+        if '</head>' in html:
+            html = html.replace('</head>', css + '</head>', 1)
+        elif '<body' in html:
+            idx = html.index('<body')
+            html = html[:idx] + css + html[idx:]
+        else:
+            html = css + html
+
+    # Handle viewer-toggle JS independently of whether CSS was fresh or updated.
+    has_js = 'id="furigana-ruby-js"' in html
+    if include_toggle and not has_js:
+        # Add JS — also covers the "CSS present but JS missing" repair case.
+        if '</body>' in html:
+            html = html.replace('</body>', RUBY_JS + '</body>', 1)
+        else:
+            html += RUBY_JS
+    elif not include_toggle and has_js:
+        # User opted out — strip the JS.
+        html = re.sub(r'<script\b[^>]*\bid="furigana-ruby-js"[^>]*>.*?</script>\s*',
+                      '', html, flags=re.DOTALL)
     return html
 
 
 def strip_css_js(html):
-    html = re.sub(r'<style\s+id="furigana-ruby-css">.*?</style>\s*',
+    # Use attribute-order-agnostic patterns so tags with extra attributes
+    # (data-engine, data-levels added in v1.6.0+) are matched correctly.
+    # The old patterns required '>' immediately after the id value and silently
+    # failed to strip the CSS tag, leaving CSS in place while JS was removed —
+    # causing the "CSS without JS" state that broke the viewer toggle.
+    html = re.sub(r'<style\b[^>]*\bid="furigana-ruby-css"[^>]*>.*?</style>\s*',
                   '', html, flags=re.DOTALL)
-    html = re.sub(r'<script\s+id="furigana-ruby-js">.*?</script>\s*',
+    html = re.sub(r'<script\b[^>]*\bid="furigana-ruby-js"[^>]*>.*?</script>\s*',
                   '', html, flags=re.DOTALL)
     return html
 
@@ -470,7 +492,7 @@ def segments_to_html(segments):
 
 
 def inject_furigana_html(html_content, annotate_levels=None, btn_side='left',
-                         engine=None, metadata_levels=None):
+                         engine=None, metadata_levels=None, include_toggle=True):
     parser = RubyAwareParser()
     parser.feed(html_content)
     parts = []
@@ -491,7 +513,7 @@ def inject_furigana_html(html_content, annotate_levels=None, btn_side='left',
     # tag to reflect the full final set (N1+N2+N3).
     levels_to_store = metadata_levels if metadata_levels is not None else annotate_levels
     return inject_css_js(''.join(parts), btn_side=btn_side, engine_id=engine_id,
-                         levels=levels_to_store)
+                         levels=levels_to_store, include_toggle=include_toggle)
 
 
 def strip_auto_furigana_html(html_content):
@@ -676,7 +698,7 @@ def get_stored_levels(epub_path):
 
 def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                       remove_levels=None, progress_callback=None, engine=None,
-                      metadata_levels=None):
+                      metadata_levels=None, include_toggle=True):
     import zipfile, os, tempfile, shutil
 
     if mode == 'add' and engine is None:
@@ -749,7 +771,8 @@ def process_epub_file(epub_path, output_path, mode='add', annotate_levels=None,
                                 text = inject_furigana_html(
                                     text, annotate_levels=annotate_levels,
                                     btn_side=btn_side, engine=engine,
-                                    metadata_levels=metadata_levels)
+                                    metadata_levels=metadata_levels,
+                                    include_toggle=include_toggle)
                         elif remove_levels is not None:
                             text = strip_auto_furigana_by_levels(text, remove_levels)
                         else:

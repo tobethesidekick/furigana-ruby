@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mockup v3</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; font-size: 13px; background: #d8d8d8; padding: 28px 28px 40px; display: flex; flex-direction: column; gap: 36px; }
+h2 { font-size: 11px; font-weight: 700; color: #555; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 10px; }
+.row { display: flex; gap: 24px; align-items: flex-start; }
+.col-lbl { font-size: 11px; color: #666; margin-bottom: 6px; font-weight: 600; letter-spacing: .04em; }
+.win { background: #f5f5f5; border-radius: 10px; box-shadow: 0 18px 50px rgba(0,0,0,.32),0 0 0 .5px rgba(0,0,0,.18); overflow: hidden; }
+.tb { background: linear-gradient(to bottom,#ebebeb,#d6d6d6); border-bottom: 1px solid #aaa; height: 28px; display: flex; align-items: center; padding: 0 12px; gap: 8px; position: relative; }
+.tb-t { position: absolute; left: 50%; transform: translateX(-50%); font-size: 13px; font-weight: 600; color: #333; }
+.dot { width: 12px; height: 12px; border-radius: 50%; }
+.r{background:#ff5f57;border:.5px solid #e0443e;} .y{background:#ffbd2e;border:.5px solid #dea123;} .g{background:#28c940;border:.5px solid #1aab29;}
+.bd { padding: 14px 16px 10px; }
+.desc { color: #333; line-height: 1.45; margin-bottom: 3px; }
+.dnote { color: #666; font-size: 11.5px; margin-bottom: 10px; }
+hr { border: none; border-top: 1px solid #c8c8c8; margin: 9px 0; }
+/* options */
+.oc { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.ch { font-size: 9px; color: #555; width: 12px; text-align: center; display: inline-block; }
+.ch.open { transform: rotate(90deg); }
+.ol { font-weight: 600; font-size: 13px; color: #1a1a1a; }
+.os-sum { font-size: 12px; color: #555; }
+.op { border: 1px solid #c5c5c5; border-radius: 6px; background: #fafafa; margin-top: 5px; overflow: hidden; }
+.os-sec { padding: 9px 12px; }
+.os-sec+.os-sec { border-top: 1px solid #e0e0e0; }
+.slbl { font-size: 10px; font-weight: 700; color: #777; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 7px; }
+.qs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 7px; }
+.qb { padding: 2px 8px; font-size: 11.5px; border: 1px solid #bbb; border-radius: 4px; background: #fff; color: #333; }
+.qb.on { background: #e8eef8; border-color: #7a9dd4; color: #2a5aaa; font-weight: 600; }
+.cr { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; line-height: 1.4; }
+.cr:last-child { margin-bottom: 0; }
+.cr input { margin-top: 2px; width: 13px; height: 13px; flex-shrink: 0; accent-color: #2a5aaa; }
+.cr label { color: #1a1a1a; }
+.cr label b { font-weight: 600; }
+.dim { color: #888; }
+.er { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.er input { width: 13px; height: 13px; accent-color: #2a5aaa; }
+.est { font-size: 11.5px; color: #666; }
+.ebtn { padding: 2px 8px; font-size: 11.5px; border: 1px solid #bbb; border-radius: 4px; background: #fff; color: #333; }
+/* book list */
+.bl { border: 1px solid #c5c5c5; border-radius: 5px; overflow: hidden; margin-top: 8px; }
+.blh { background: #e6e6e6; padding: 5px 10px; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; border-bottom: 1px solid #c5c5c5; }
+.blh .st { margin-left: auto; }
+.blr { padding: 7px 10px; display: flex; align-items: flex-start; gap: 7px; }
+.blr:nth-child(odd){background:#fff;} .blr:nth-child(even){background:#f8f8f8;}
+.blr input { margin-top: 2px; width: 13px; height: 13px; }
+.bi { flex: 1; }
+.bt { font-weight: 500; color: #111; font-size: 12.5px; }
+.bs1 { font-size: 11.5px; color: #666; margin-top: 1px; }
+.bs2 { font-size: 11.5px; color: #888; margin-top: 1px; }
+.bst { font-size: 12px; margin-left: auto; white-space: nowrap; padding-top: 1px; }
+.ok { color: #888; } .warn { color: #c05000; font-weight: 500; }
+/* summary text area */
+.sum-area { margin-top: 8px; background: #fff; border: 1px solid #c5c5c5; border-radius: 4px; padding: 6px 8px; font-size: 12px; color: #444; line-height: 1.5; min-height: 52px; }
+/* buttons */
+.btnr { display: flex; align-items: center; padding: 9px 16px 11px; border-top: 1px solid #ddd; margin-top: 8px; gap: 7px; }
+.btn { padding: 4px 14px; font-size: 13px; border-radius: 5px; cursor: pointer; border: 1px solid #bbb; background: linear-gradient(to bottom,#fefefe,#e8e8e8); color: #1a1a1a; }
+.pri { background: linear-gradient(to bottom,#5a8fe0,#3a6cc8); border-color: #2a5aaa; color: #fff; font-weight: 500; }
+.sp { flex: 1; }
+/* settings */
+.grp { margin-bottom: 13px; }
+.gt { font-size: 13px; font-weight: 600; color: #1a1a1a; border: 1px solid #c5c5c5; border-radius: 6px 6px 0 0; padding: 7px 12px 6px; background: #f0f0f0; }
+.gi { padding: 8px 12px 8px; border: 1px solid #c5c5c5; border-top: none; border-radius: 0 0 6px 6px; background: #fff; }
+.gnote { font-size: 12px; color: #555; margin-bottom: 7px; line-height: 1.4; }
+.sr { display: flex; align-items: flex-start; gap: 7px; margin-bottom: 5px; line-height: 1.4; }
+.sr:last-child { margin-bottom: 0; }
+.sr input { margin-top: 2px; width: 13px; height: 13px; accent-color: #2a5aaa; flex-shrink: 0; }
+.sr label { color: #1a1a1a; font-size: 13px; }
+.ssep { border: none; border-top: 1px solid #e8e8e8; margin: 8px 0; }
+.ssublbl { font-size: 12px; font-weight: 600; color: #333; margin-bottom: 6px; }
+.sindent { padding-left: 20px; }
+.snote { font-size: 11.5px; color: #777; margin-top: 2px; }
+.seng { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.seng input { width: 13px; height: 13px; accent-color: #2a5aaa; }
+.sest { font-size: 11.5px; color: #666; }
+.sebtn { padding: 2px 8px; font-size: 11.5px; border: 1px solid #bbb; border-radius: 4px; background: #f5f5f5; color: #333; }
+.srem { font-size: 11.5px; color: #cc3300; text-decoration: underline; cursor: pointer; margin-top: 3px; display: inline-block; }
+.sbtnr { display: flex; justify-content: flex-end; padding: 9px 16px 11px; border-top: 1px solid #ddd; gap: 8px; }
+select { font-size: 12px; border: 1px solid #bbb; border-radius: 4px; padding: 1px 4px; background: #fff; color: #333; }
+.s-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 12.5px; }
+.s-row input { width: 13px; height: 13px; accent-color: #2a5aaa; }
+</style>
+</head>
+<body>
+
+<!-- ══ RUBY DIALOG ══ -->
+<div>
+  <h2>Ruby Dialog</h2>
+  <div class="row">
+
+    <!-- Collapsed -->
+    <div>
+      <div class="col-lbl">COLLAPSED (default)</div>
+      <div class="win" style="width:510px;">
+        <div class="tb"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="tb-t">Furigana (Ruby) Customization</div></div>
+        <div class="bd">
+          <div class="desc">Add/Update the Furigana (Ruby) to ebooks based on the selected JLPT levels.<br>Publisher furigana is always preserved.</div>
+          <div class="dnote">* A copy of the original file will be saved based on your plugin Settings.</div>
+          <hr>
+          <div class="oc">
+            <span class="ch">&#9658;</span>
+            <span class="ol">Options</span>
+            <span class="os-sum">N1&ndash;N3 &nbsp;&middot;&nbsp; Toggle in Viewer off &nbsp;&middot;&nbsp; Enhanced</span>
+          </div>
+          <hr>
+          <div class="bl">
+            <div class="blh"><input type="checkbox" checked><span>Books</span><span class="st">Status</span></div>
+            <div class="blr">
+              <input type="checkbox" disabled>
+              <div class="bi">
+                <div class="bt">&#25991;&#24235;&#29256; &#26360;&#27004;&#24673;&#22530; &#30772;&#26237; (&#38598;&#33521;&#31038;&#25991;&#24235;)</div>
+                <div class="bs1">Japanese (&#26085;&#26412;&#35486;) &middot; Publisher: 5,597</div>
+                <div class="bs2">Auto: 25,993 &middot; N1&ndash;N3 &middot; Engine: Enhanced &middot; Toggle: &#10003;</div>
+              </div>
+              <div class="bst ok">Up to date</div>
+            </div>
+            <div class="blr">
+              <input type="checkbox" checked>
+              <div class="bi">
+                <div class="bt">&#22812;&#26126;&#12369;&#12434;&#30693;&#12425;&#12378;&#12395; &mdash;&#22825;&#35611;&#32068;&#20313;&#35441;&mdash; (&#12513;&#12487;&#12451;&#12450;&#12527;&#12540;&#12463;&#12473;&#25991;&#24235;)</div>
+                <div class="bs1">Japanese (&#26085;&#26412;&#35486;) &middot; Publisher: 412</div>
+                <div class="bs2">Auto: 18,204 &middot; N1&ndash;N3 &middot; Engine: Enhanced &middot; Toggle: missing</div>
+              </div>
+              <div class="bst warn">Toggle missing</div>
+            </div>
+          </div>
+          <div class="sum-area">1 Japanese &middot; 1 EPUB<br>1 up to date &middot; 1 needs toggle repair</div>
+        </div>
+        <div class="btnr">
+          <button class="btn">&#128218; Open in Viewer</button>
+          <div class="sp"></div>
+          <button class="btn">Close</button>
+          <button class="btn pri">Add Ruby</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Expanded -->
+    <div>
+      <div class="col-lbl">EXPANDED</div>
+      <div class="win" style="width:510px;">
+        <div class="tb"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="tb-t">Furigana (Ruby) Customization</div></div>
+        <div class="bd">
+          <div class="desc">Add/Update the Furigana (Ruby) to ebooks based on the selected JLPT levels.<br>Publisher furigana is always preserved.</div>
+          <div class="dnote">* A copy of the original file will be saved based on your plugin Settings.</div>
+          <hr>
+          <div class="oc">
+            <span class="ch open">&#9658;</span>
+            <span class="ol">Options</span>
+          </div>
+          <div class="op">
+            <div class="os-sec">
+              <div class="slbl">JLPT Levels</div>
+              <div class="qs">
+                <button class="qb">None</button><button class="qb">N1</button><button class="qb">N1&ndash;N2</button>
+                <button class="qb on">N1&ndash;N3 &#9733;</button><button class="qb">N1&ndash;N4</button><button class="qb">N1&ndash;N5</button><button class="qb">All</button>
+              </div>
+              <div class="cr"><input type="checkbox" checked><label><b>N1 &mdash; Rare / literary kanji</b></label></div>
+              <div class="cr"><input type="checkbox" checked><label><b>N2 &mdash; Advanced kanji</b></label></div>
+              <div class="cr"><input type="checkbox" checked><label><b>N3 &mdash; Intermediate kanji &#9733;</b></label></div>
+              <div class="cr"><input type="checkbox"><label>N4 &mdash; Basic kanji <span class="dim">(&#23398;&#12289;&#36008;&#12289;&#26009;&#29702;&#8230;)</span></label></div>
+              <div class="cr"><input type="checkbox"><label>N5 &mdash; Elementary kanji <span class="dim">(&#26085;&#12289;&#20154;&#12289;&#23665;&#8230;)</span></label></div>
+              <div class="cr"><input type="checkbox"><label>Unlisted &mdash; Kanji not in any JLPT list</label></div>
+            </div>
+            <div class="os-sec">
+              <div class="slbl">Viewer Toggle</div>
+              <div class="cr">
+                <input type="checkbox">
+                <div>
+                  <label>Include toggle button in Calibre Viewer</label>
+                  <div style="font-size:11.5px;color:#666;margin-top:2px;">Cycles through: All selected levels &middot; Publisher only &middot; None</div>
+                </div>
+              </div>
+            </div>
+            <div class="os-sec">
+              <div class="slbl">Furigana Engine</div>
+              <div class="er"><input type="radio" name="eng" checked><label>Enhanced (built-in)</label></div>
+              <div class="er">
+                <input type="radio" name="eng"><label>High-accuracy (SudachiPy)</label>
+                <span class="est">0.6.11 &middot; ready</span>
+                <button class="ebtn">Re-download</button>
+              </div>
+            </div>
+          </div>
+          <hr>
+          <div class="bl">
+            <div class="blh"><input type="checkbox" checked><span>Books</span><span class="st">Status</span></div>
+            <div class="blr">
+              <input type="checkbox" disabled>
+              <div class="bi">
+                <div class="bt">&#25991;&#24235;&#29256; &#26360;&#27004;&#24673;&#22530; &#30772;&#26237; (&#38598;&#33521;&#31038;&#25991;&#24235;)</div>
+                <div class="bs1">Japanese (&#26085;&#26412;&#35486;) &middot; Publisher: 5,597</div>
+                <div class="bs2">Auto: 25,993 &middot; N1&ndash;N3 &middot; Engine: Enhanced &middot; Toggle: &#10003;</div>
+              </div>
+              <div class="bst ok">Up to date</div>
+            </div>
+            <div class="blr">
+              <input type="checkbox" checked>
+              <div class="bi">
+                <div class="bt">&#22812;&#26126;&#12369;&#12434;&#30693;&#12425;&#12378;&#12395; &mdash;&#22825;&#35611;&#32068;&#20313;&#35441;&mdash; (&#12513;&#12487;&#12451;&#12450;&#12527;&#12540;&#12463;&#12473;&#25991;&#24235;)</div>
+                <div class="bs1">Japanese (&#26085;&#26412;&#35486;) &middot; Publisher: 412</div>
+                <div class="bs2">Auto: 18,204 &middot; N1&ndash;N3 &middot; Engine: Enhanced &middot; Toggle: missing</div>
+              </div>
+              <div class="bst warn">Toggle missing</div>
+            </div>
+          </div>
+          <div class="sum-area">1 Japanese &middot; 1 EPUB<br>1 up to date &middot; 1 needs toggle repair</div>
+        </div>
+        <div class="btnr">
+          <button class="btn">&#128218; Open in Viewer</button>
+          <div class="sp"></div>
+          <button class="btn">Close</button>
+          <button class="btn pri">Add Ruby</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SETTINGS ══ -->
+<div>
+  <h2>Settings Dialog</h2>
+  <div class="row">
+    <div class="win" style="width:520px;">
+      <div class="tb"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div><div class="tb-t">Furigana Ruby &mdash; Settings</div></div>
+      <div class="bd" style="padding-bottom:4px;">
+
+        <!-- Tile Action -->
+        <div class="grp">
+          <div class="gt">Tile Action</div>
+          <div class="gi">
+            <div class="gnote">Choose what happens when you click the main toolbar button.</div>
+            <hr style="margin:5px 0 8px;">
+            <div class="sr"><input type="radio" name="tile" checked><label>Furigana (Ruby)</label></div>
+            <div class="sr"><input type="radio" name="tile"><label>Chinese S&#8596;T Conversion</label></div>
+            <div class="sr"><input type="radio" name="tile"><label>Text Direction</label></div>
+          </div>
+        </div>
+
+        <!-- When Modifying -->
+        <div class="grp">
+          <div class="gt">When Modifying Books</div>
+          <div class="gi">
+            <div class="gnote">Applies to all operations: ruby, Chinese S&#8596;T, text direction, and auto-import.</div>
+            <hr style="margin:5px 0 8px;">
+            <div class="sr"><input type="radio" name="ko" checked><label>Replace original <span class="dim" style="font-size:12px;">(saves space, no recovery)</span></label></div>
+            <div class="sr"><input type="radio" name="ko"><label>Keep original as ORIGINAL_EPUB <span class="dim" style="font-size:12px;">(doubles storage, recoverable via Calibre)</span></label></div>
+            <div style="font-size:11.5px;color:#888;font-style:italic;margin-top:4px;"><i>ORIGINAL_EPUB copies appear in the book&#39;s format list and can be deleted individually.</i></div>
+          </div>
+        </div>
+
+        <!-- Auto Import -->
+        <div class="grp" style="margin-bottom:0;">
+          <div class="gt">Auto Import</div>
+          <div class="gi">
+            <div style="display:flex;align-items:center;margin-bottom:6px;">
+              <span style="font-size:12.5px;color:#555;">Folder monitoring is not running</span>
+              <span style="flex:1;"></span>
+              <a href="#" style="color:#0066cc;font-size:12px;text-decoration:underline;">Show Instruction</a>
+            </div>
+            <hr style="margin:4px 0 8px;">
+
+            <!-- Watch Folders -->
+            <div class="ssublbl">Watch Folders</div>
+            <div style="border:1px solid #ccc;border-radius:4px;background:#f9f9f9;padding:4px 8px;font-size:12px;color:#555;height:52px;margin-bottom:5px;overflow:hidden;">/Users/yi-hsuanwu/Documents/ScriptForCalibre/CalibreMonitor</div>
+            <div style="display:flex;gap:6px;margin-bottom:7px;">
+              <button class="btn" style="font-size:12px;padding:2px 10px;">Add Folder&#8230;</button>
+              <button class="btn" style="font-size:12px;padding:2px 10px;">Remove Selected</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;font-size:12.5px;">
+              <span>Move original file after import to subfolder:</span>
+              <input type="text" value="_imported" style="width:90px;font-size:12px;border:1px solid #ccc;border-radius:4px;padding:1px 5px;">
+              <span style="color:#888;font-size:12px;">(blank&nbsp;=&nbsp;leave in place)</span>
+            </div>
+
+            <hr class="ssep">
+
+            <!-- Auto Chinese -->
+            <div style="font-weight:600;font-size:13px;margin-bottom:5px;display:flex;align-items:center;gap:7px;">
+              <input type="checkbox" checked style="width:13px;height:13px;accent-color:#2a5aaa;">
+              <label style="font-weight:600;">Auto Chinese conversion on import</label>
+            </div>
+            <div class="sindent">
+              <div style="font-size:11.5px;color:#666;margin-bottom:6px;">Supported formats: EPUB, HTML, TXT, FB2</div>
+              <div class="s-row"><span>Direction:</span>
+                <input type="radio" name="cdir" checked><label>Simplified &#8594; Traditional</label>
+                <input type="radio" name="cdir" style="margin-left:8px;"><label>Traditional &#8594; Simplified</label>
+              </div>
+              <div class="s-row"><span>Variant:</span>
+                <select><option>Taiwan Traditional (s2twp)</option></select>
+              </div>
+            </div>
+
+            <hr class="ssep">
+
+            <!-- Auto Ruby -->
+            <div style="font-weight:600;font-size:13px;margin-bottom:7px;display:flex;align-items:center;gap:7px;">
+              <input type="checkbox" checked style="width:13px;height:13px;accent-color:#2a5aaa;">
+              <label style="font-weight:600;">Auto add ruby on import &nbsp;<span style="font-weight:400;color:#888;">(Japanese books only)</span></label>
+            </div>
+
+            <div class="sindent">
+              <div style="font-size:11.5px;color:#666;margin-bottom:7px;">Supported formats: EPUB only</div>
+
+              <div class="ssublbl">Annotation levels</div>
+              <div style="margin-bottom:8px;">
+                <div class="sr"><input type="checkbox" checked><label><b>N1 &mdash; Rare / literary kanji</b></label></div>
+                <div class="sr"><input type="checkbox" checked><label><b>N2 &mdash; Advanced kanji</b></label></div>
+                <div class="sr"><input type="checkbox" checked><label><b>N3 &mdash; Intermediate kanji &#9733;</b></label></div>
+                <div class="sr"><input type="checkbox"><label>N4 &mdash; Basic kanji</label></div>
+                <div class="sr"><input type="checkbox"><label>N5 &mdash; Elementary kanji</label></div>
+                <div class="sr"><input type="checkbox"><label>Unlisted &mdash; Kanji not in any JLPT list</label></div>
+              </div>
+
+              <hr class="ssep">
+
+              <div class="ssublbl">Viewer toggle</div>
+              <div class="sr" style="margin-bottom:1px;"><input type="checkbox"><label>Include toggle button in Calibre Viewer</label></div>
+              <div class="snote" style="margin-left:20px;margin-bottom:8px;">Cycles through: All selected levels &middot; Publisher only &middot; None</div>
+
+              <hr class="ssep">
+
+              <div class="ssublbl">Furigana engine</div>
+              <div class="seng"><input type="radio" name="aeng" checked><label>Enhanced (built-in)</label></div>
+              <div class="seng">
+                <input type="radio" name="aeng"><label>High-accuracy (SudachiPy)</label>
+                <span class="sest">0.6.11 &middot; ready</span>
+                <button class="sebtn">Re-download</button>
+              </div>
+              <a href="#" class="srem">Remove SudachiPy&#8230;</a>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+      <div class="sbtnr">
+        <button class="btn">Cancel</button>
+        <button class="btn pri">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
