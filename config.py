@@ -59,12 +59,19 @@ JLPT_LEVELS = [
 def _load_raw_plugin_json():
     """Read plugin prefs directly from the JSON file, bypassing JSONConfig caching."""
     import sys
-    if sys.platform == 'darwin':
-        p = Path.home() / 'Library/Preferences/calibre/plugins/furigana_ruby.json'
-    elif sys.platform.startswith('linux'):
-        p = Path.home() / '.config/calibre/plugins/furigana_ruby.json'
-    else:
-        p = Path.home() / 'AppData/Roaming/calibre/plugins/furigana_ruby.json'
+    # Prefer Calibre's own config_dir — correct for portable installs, non-standard
+    # locations, and all platforms. Fall back to hardcoded paths only when running
+    # outside Calibre (e.g. standalone tests).
+    try:
+        from calibre.utils.config import config_dir
+        p = Path(config_dir) / 'plugins' / 'furigana_ruby.json'
+    except ImportError:
+        if sys.platform == 'darwin':
+            p = Path.home() / 'Library/Preferences/calibre/plugins/furigana_ruby.json'
+        elif sys.platform.startswith('linux'):
+            p = Path.home() / '.config/calibre/plugins/furigana_ruby.json'
+        else:
+            p = Path.home() / 'AppData/Roaming/calibre/plugins/furigana_ruby.json'
     try:
         if p.exists():
             with open(p, encoding='utf-8') as f:
@@ -459,7 +466,8 @@ class ConfigWidget(QWidget):
                 if ok:
                     _cfg_update_engine_ui()
                 else:
-                    self._cfg_eng_status_lbl.setText(f'Download failed: {err[:60]}')
+                    # Show full error (up to 200 chars) so the user can see what went wrong
+                    self._cfg_eng_status_lbl.setText(f'Download failed: {err[:200]}')
             t.done.connect(_on_done)
             t.start()
 

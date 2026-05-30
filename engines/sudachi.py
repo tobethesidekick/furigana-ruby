@@ -221,7 +221,11 @@ def install(progress_callback=None):
     Install SudachiPy + sudachidict_small for system Python into get_sudachi_dir().
     progress_callback(message: str) is called with status text updates.
     Raises RuntimeError on failure.
+    Always wipes the existing install directory first so a broken prior install
+    cannot block a fresh download.
     """
+    import shutil
+
     py = _find_system_python()
     if not py:
         raise RuntimeError(
@@ -229,6 +233,12 @@ def install(progress_callback=None):
             'Install Python 3 from python.org, then try again.')
 
     sudachi_dir = get_sudachi_dir()
+
+    # Wipe any existing (possibly broken) install before downloading fresh.
+    # This avoids pip --upgrade failing due to corrupted or partial files.
+    if os.path.isdir(sudachi_dir):
+        SudachiEngine._stop_daemon()   # kill daemon before wiping its files
+        shutil.rmtree(sudachi_dir, ignore_errors=True)
     os.makedirs(sudachi_dir, exist_ok=True)
 
     if progress_callback:
@@ -238,7 +248,8 @@ def install(progress_callback=None):
         [py, '-m', 'pip', 'install',
          'sudachipy', 'sudachidict_small',
          '--target', sudachi_dir,
-         '--upgrade', '--quiet', '--no-warn-script-location'],
+         '--prefer-binary',
+         '--quiet', '--no-warn-script-location'],
         capture_output=True, text=True, timeout=300)
 
     if r.returncode != 0:

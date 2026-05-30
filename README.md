@@ -215,6 +215,13 @@ Accuracy depends on which engine you use.
 
 ## Changelog
 
+### v1.6.2
+**Bug fixes**
+- **Settings not rendering correctly after save** — the Settings dialog now correctly reads saved values on all Calibre install types (portable, non-default location, Windows custom path). Previously, settings were saved correctly but the dialog always showed defaults on reopen due to a hardcoded config path that didn't account for non-standard installs
+- **SudachiPy re-download failing** — the Download/Re-download button now wipes the existing install directory before downloading fresh, preventing a corrupted or partial prior install from blocking the re-download. Added `--prefer-binary` flag to avoid build-tool failures on systems without compilers
+
+---
+
 ### v1.6.1
 **New: JLPT level tracking**
 - The EPUB now stores which JLPT levels were used when annotating (`data-levels` in the CSS tag, alongside the existing engine ID)
