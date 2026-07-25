@@ -194,7 +194,14 @@ import platform, subprocess, time
 
 CALIBRE_PLUGIN_DIR = os.path.expanduser(
     '~/Library/Preferences/calibre/plugins')
-dest = os.path.join(CALIBRE_PLUGIN_DIR, 'FuriganaRuby.zip')
+# Deploy target must match the plugin's declared display name (see `name` in
+# __init__.py: 'Furigana Ruby', with a space) — that's the filename Calibre
+# actually registers in customize.py.json when the plugin is loaded via
+# Preferences > Load plugin. A prior version of this script deployed to
+# 'FuriganaRuby.zip' (no space, matching the repo/output-file convention
+# instead), which Calibre silently ignored — every release needed a manual
+# copy-over afterward. Confirmed true on both the MacBook and the iMac.
+dest = os.path.join(CALIBRE_PLUGIN_DIR, 'Furigana Ruby.zip')
 
 if platform.system() == 'Darwin' and os.path.isdir(CALIBRE_PLUGIN_DIR):
     # Calibre is already installed — quit it, deploy, relaunch.
