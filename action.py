@@ -1318,8 +1318,11 @@ class FuriganaAction(InterfaceAction):
                 return line1
             parts2 = [f'Auto: {row["auto_count"]:,}']
             stored = row.get('stored_levels')
-            if stored is not None and stored:
-                lvl_str = ', '.join(l for l in _LVL_ORDER if l in stored)
+            # Pre-v1.6.1 books carry no data-levels stamp — fall back to levels
+            # detected from content so old and new books read consistently.
+            display_levels = stored if stored is not None else row.get('current_levels')
+            if display_levels:
+                lvl_str = ', '.join(l for l in _LVL_ORDER if l in display_levels)
                 if lvl_str:
                     parts2.append(lvl_str)
             eid = row.get('stored_engine_id')
@@ -1513,6 +1516,43 @@ class FuriganaAction(InterfaceAction):
                 _cust_btn_ref[0].setEnabled(True)
             _update_apply_state()
 
+        # ── Single source of truth for pending work ───────────────
+        def _pending_work(row, sel):
+            """What `row` still needs to reach selection `sel`.
+
+            Returns (to_add, to_remove, engine_changed, toggle_needed). Used by
+            both _refresh_checks_ruby (checkbox visibility) and _on_apply (task
+            building) so they can never disagree about whether a book has work
+            pending — previously each computed this independently and could
+            reach different answers for books annotated before the data-levels
+            stamp existed (v1.6.1), where the checkbox stayed enabled but Apply
+            found nothing to do.
+            """
+            stored  = row.get('stored_levels')
+            current = row['current_levels']
+            if stored is not None and stored == sel:
+                # Stamp says this book is already at the target selection — it
+                # may simply have no kanji in some levels, which a content diff
+                # alone can't distinguish from "not yet processed".
+                to_add    = set()
+                to_remove = set()
+            else:
+                to_add    = sel - current
+                to_remove = current - sel
+            engine_changed = (
+                not to_add and not to_remove
+                and bool(current)
+                and (row.get('stored_engine_id') is None
+                     or row['stored_engine_id'] != prefs['manual_engine'])
+            )
+            toggle_needed = (
+                _incl_toggle[0]
+                and not row.get('has_toggle', False)
+                and not to_add and not to_remove and not engine_changed
+                and bool(current)
+            )
+            return to_add, to_remove, engine_changed, toggle_needed
+
         # ── Per-book up-to-date check ─────────────────────────────
         def _refresh_checks_ruby(preserve_status=False):
             """Show/hide checkboxes and update status based on levels + toggle state.
@@ -1522,7 +1562,6 @@ class FuriganaAction(InterfaceAction):
                                     or clear it (called on level/toggle changes)
             """
             current_sel  = {l for l, v in level_checked.items() if v}
-            want_toggle  = _incl_toggle[0]
             for row in book_rows:
                 if not row['ruby_allowed']:
                     continue
@@ -1532,19 +1571,11 @@ class FuriganaAction(InterfaceAction):
                 sub_lb = sub_labels.get(bid)
                 if cb is None or sl is None:
                     continue
-                stored = row.get('stored_levels')
-                has_js = row.get('has_toggle', False)
 
-                # A book is "up to date" when:
-                #   • Ruby levels match current selection, AND
-                #   • Either toggle is off, or toggle JS is already in the file, AND
-                #   • Stored engine matches the currently selected engine
-                levels_match = (stored is not None and stored == current_sel)
-                toggle_ok    = (not want_toggle) or has_js
-                engine_match = (row.get('stored_engine_id') == prefs['manual_engine']
-                                or row.get('stored_engine_id') is None)
+                to_add, to_remove, engine_changed, toggle_needed = (
+                    _pending_work(row, current_sel))
 
-                if levels_match and toggle_ok and engine_match:
+                if not (to_add or to_remove or engine_changed or toggle_needed):
                     _up_to_date_bids.add(bid)
                     cb.setVisible(False)
                     cb.setChecked(False)
@@ -1558,9 +1589,9 @@ class FuriganaAction(InterfaceAction):
                     if was_hidden:
                         cb.setChecked(True)
                     if not preserve_status and not sl.text().startswith('⚠'):
-                        # Show "Toggle missing" when levels match but JS is absent
-                        # and user wants toggle. Otherwise clear status.
-                        if levels_match and want_toggle and not has_js:
+                        # toggle_needed only occurs when nothing else is pending
+                        # (see its definition), so it alone means "Toggle missing".
+                        if toggle_needed:
                             sl.setText('Toggle missing')
                             sl.setStyleSheet('color: #c05000; font-weight: bold;')
                         else:
@@ -1578,33 +1609,14 @@ class FuriganaAction(InterfaceAction):
             # Sync live checkboxes → level_checked (no-op if panel is collapsed)
             _sync_from_cbs()
             checked_levels = {l for l, v in level_checked.items() if v}
-            preferred      = prefs['manual_engine']
 
             tasks = []
             for row in book_rows:
                 cb = cb_map[row['book_id']]
                 if not (cb.isVisible() and cb.isChecked()):
                     continue
-                to_add    = checked_levels - row['current_levels']
-                to_remove = row['current_levels'] - checked_levels
-                # Engine mismatch with no level change → full remove + re-add.
-                # Also triggers when engine is unknown (old EPUBs processed before
-                # v1.6.0 that don't carry an engine ID in the CSS tag).
-                engine_changed = (
-                    not to_add and not to_remove
-                    and bool(row['current_levels'])
-                    and (row.get('stored_engine_id') is None
-                         or row['stored_engine_id'] != preferred)
-                )
-                # Toggle repair: viewer toggle JS is missing and the user wants it.
-                # Re-run with current levels (no-op for ruby content) to trigger
-                # inject_css_js which adds the missing JS.
-                toggle_needed = (
-                    _incl_toggle[0]
-                    and not row.get('has_toggle', False)
-                    and not to_add and not to_remove and not engine_changed
-                    and bool(row['current_levels'])
-                )
+                to_add, to_remove, engine_changed, toggle_needed = (
+                    _pending_work(row, checked_levels))
                 if to_add or to_remove or engine_changed or toggle_needed:
                     # force_rerun: re-annotate at current levels so inject_css_js fires
                     force_rerun = engine_changed or toggle_needed
