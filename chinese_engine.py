@@ -161,6 +161,34 @@ def _get_converter(variant='s2tw'):
     return cc
 
 
+# ── False-positive guard: "的士" (taxi) phrase misfire ────────────────────────
+# OpenCC's Taiwan "phrase" dictionaries (s2twp, tw2sp) map "的士" (the
+# Cantonese/HK loanword for "taxi") to "計程車"/"计程车" as a fixed 2-character
+# phrase, matched anywhere it occurs as a contiguous substring — including
+# when "的" is really the possessive/attributive particle immediately
+# preceding an unrelated word that happens to start with "士" (的士兵, "his/her
+# soldiers", wrongly becomes 計程車兵). "的" never changes under any S<->T
+# variant, so it's always safe to convert it separately from what follows —
+# that stops the phrase matcher from ever seeing "的士" as one unit. Scoped to
+# a curated list of common 士-initial words rather than a general
+# segmentation fix, since that's the specific ambiguity class observed.
+_SHI_INITIAL_WORDS = (
+    '士兵', '士官', '士氣', '士气', '士紳', '士绅', '士卒', '士大夫',
+    '士林', '士人', '士子', '士農工商', '士农工商', '士族',
+)
+_DE_SHI_SPLIT_RE = re.compile(
+    r'(?<=的)(?=(?:' + '|'.join(_SHI_INITIAL_WORDS) + r'))'
+)
+
+
+def _convert_text(text, converter):
+    """converter.convert(), guarded against the "的士"→taxi false positive."""
+    pieces = _DE_SHI_SPLIT_RE.split(text)
+    if len(pieces) == 1:
+        return converter.convert(text)
+    return ''.join(converter.convert(p) for p in pieces)
+
+
 # ── HTML / XML text-node walker ───────────────────────────────────────────────
 # Converts only text nodes — never touches tag names, attributes, or CSS/JS.
 
@@ -194,7 +222,7 @@ def _convert_html_text_nodes(html, converter):
                     skip_depth += 1
         else:
             if skip_depth == 0 and part:
-                part = converter.convert(part)
+                part = _convert_text(part, converter)
             result.append(part)
 
     return ''.join(result)
@@ -299,7 +327,7 @@ def convert_txt_s2t(txt_path, output_path, variant='s2tw'):
         if text is None:
             with open(txt_path, 'r', encoding='utf-8', errors='replace') as f:
                 text = f.read()
-        converted = converter.convert(text)
+        converted = _convert_text(text, converter)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(converted)
         return len(text), errors
@@ -309,7 +337,7 @@ def convert_txt_s2t(txt_path, output_path, variant='s2tw'):
 
 def convert_string_s2t(text, variant='s2tw'):
     """Convert a plain string from Simplified to Traditional Chinese."""
-    return _get_converter(variant).convert(text)
+    return _convert_text(text, _get_converter(variant))
 
 
 # ── HTML processor ────────────────────────────────────────────────────────────

@@ -2726,7 +2726,8 @@ class FuriganaAction(InterfaceAction):
         _sp = QSizePolicy.Policy if PYQT6 else QSizePolicy
         meta_only_lbl = QLabel(
             'Skip content re-processing for books already in the target script. '
-            'Only update title and author not yet in the target script.')
+            'Only update title, author, comments, tags, series, and publisher '
+            'not yet in the target script.')
         meta_only_lbl.setWordWrap(True)
         meta_only_lbl.setSizePolicy(_sp.Expanding, _sp.Preferred)
         meta_only_row = QHBoxLayout()
@@ -3338,15 +3339,16 @@ class FuriganaAction(InterfaceAction):
             # Books whose content conversion failed or timed out — skip metadata
             failed_content_ids = {r[0] for r in results if r[3]} | timed_out_ids
 
-            # Update metadata (title + authors) — always, for all selected tasks
+            # Update metadata (title, authors, comments, tags, series, publisher)
+            # — always, for all selected tasks
             meta_updated  = 0
             meta_errors   = []
             target_script = 'traditional' if going_s2t else 'simplified'
             try:
                 try:
-                    from calibre_plugins.furigana_ruby.chinese_engine import _get_converter
+                    from calibre_plugins.furigana_ruby.chinese_engine import _get_converter, _convert_text
                 except ImportError:
-                    from chinese_engine import _get_converter
+                    from chinese_engine import _get_converter, _convert_text
                 converter = _get_converter(variant)
                 for row in tasks:
                     book_id = row['book_id']
@@ -3354,14 +3356,37 @@ class FuriganaAction(InterfaceAction):
                         continue
                     try:
                         title     = db.field_for('title', book_id) or ''
-                        new_title = converter.convert(title)
+                        new_title = _convert_text(title, converter)
                         if new_title != title:
                             db.set_field('title', {book_id: new_title})
 
                         authors     = list(db.field_for('authors', book_id) or [])
-                        new_authors = [converter.convert(a) for a in authors]
+                        new_authors = [_convert_text(a, converter) for a in authors]
                         if new_authors != authors:
                             db.set_field('authors', {book_id: new_authors})
+
+                        comments = db.field_for('comments', book_id) or ''
+                        if comments:
+                            new_comments = _convert_text(comments, converter)
+                            if new_comments != comments:
+                                db.set_field('comments', {book_id: new_comments})
+
+                        tags     = list(db.field_for('tags', book_id) or [])
+                        new_tags = [_convert_text(t, converter) for t in tags]
+                        if new_tags != tags:
+                            db.set_field('tags', {book_id: new_tags})
+
+                        series = db.field_for('series', book_id)
+                        if series:
+                            new_series = _convert_text(series, converter)
+                            if new_series != series:
+                                db.set_field('series', {book_id: new_series})
+
+                        publisher = db.field_for('publisher', book_id)
+                        if publisher:
+                            new_publisher = _convert_text(publisher, converter)
+                            if new_publisher != publisher:
+                                db.set_field('publisher', {book_id: new_publisher})
 
                         meta_updated += 1
                         row['title_script'] = target_script
@@ -3400,7 +3425,7 @@ class FuriganaAction(InterfaceAction):
                 lines.append(
                     f'   Skipped content re-processing for {len(skipped_content)} book(s)')
             if meta_updated:
-                lines.append(f'   Updated title/author metadata for {meta_updated} book(s)')
+                lines.append(f'   Updated metadata (title/author/comments/tags/series/publisher) for {meta_updated} book(s)')
             if save_errors:
                 lines.append(f'⚠ {len(save_errors)} save error(s):')
                 lines += [f'  {e}' for e in save_errors[:5]]
