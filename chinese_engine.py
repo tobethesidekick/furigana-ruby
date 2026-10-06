@@ -181,12 +181,53 @@ _DE_SHI_SPLIT_RE = re.compile(
 )
 
 
+# ── False-positive guard: adverbial "乍得" ("suddenly") vs. Chad ──────────────
+# OpenCC's Taiwan phrase dictionary (s2twp) maps "乍得" -> "查德" because
+# mainland China writes the country Chad as "乍得" and Taiwan as "查德". But
+# "乍得" is also an ordinary adverb in web-novel prose ("乍得回過神"), where the
+# swap is wrong. "乍" and "得" have no traditional variants, so leaving the
+# pair literal is always safe. We protect every "乍得" EXCEPT when nearby text
+# marks it as the country: a following place word or a preceding geography cue.
+_CHAD_AFTER = (
+    '共和国', '共和國', '湖', '盆地', '人', '政府', '总统', '總統', '军队', '軍隊',
+    '首都', '境内', '境內', '北部', '南部', '东部', '東部', '西部', '中部',
+    '边境', '邊境', '大使', '外交', '石油', '难民', '難民',
+)
+_CHAD_BEFORE = (
+    '非洲', '尼日尔', '尼日爾', '喀麦隆', '喀麥隆', '苏丹', '蘇丹', '利比亚',
+    '利比亞', '中非', '尼日利亚', '尼日利亞', '访问', '訪問', '前往', '来自',
+    '來自', '援助', '在', '赴', '驻', '駐',
+)
+
+
+def _split_protecting_adverb_zhade(text):
+    """Return [(segment, keep_literal)]; adverbial 乍得 is a keep-literal segment."""
+    if '乍得' not in text:
+        return [(text, False)]
+    out, pos = [], 0
+    for m in re.finditer('乍得', text):
+        start, end = m.span()
+        before, after = text[max(0, start - 4):start], text[end:end + 3]
+        if (any(after.startswith(w) for w in _CHAD_AFTER) or
+                any(before.endswith(w) for w in _CHAD_BEFORE)):
+            continue
+        if start > pos:
+            out.append((text[pos:start], False))
+        out.append(('乍得', True))
+        pos = end
+    if pos < len(text):
+        out.append((text[pos:], False))
+    return out
+
+
 def _convert_text(text, converter):
-    """converter.convert(), guarded against the "的士"→taxi false positive."""
-    pieces = _DE_SHI_SPLIT_RE.split(text)
-    if len(pieces) == 1:
-        return converter.convert(text)
-    return ''.join(converter.convert(p) for p in pieces)
+    """converter.convert(), guarded against the "的士"→taxi and adverbial
+    "乍得"→"查德" (Chad) false positives."""
+    out = []
+    for piece in _DE_SHI_SPLIT_RE.split(text):
+        for seg, keep in _split_protecting_adverb_zhade(piece):
+            out.append(seg if keep else converter.convert(seg))
+    return ''.join(out)
 
 
 # ── HTML / XML text-node walker ───────────────────────────────────────────────
