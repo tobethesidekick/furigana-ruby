@@ -220,11 +220,28 @@ def _split_protecting_adverb_zhade(text):
     return out
 
 
+# ── Custom Taiwan vocabulary missing from OpenCC's phrase dictionaries ────────
+# Simplified source phrase -> Taiwan Traditional output, applied before OpenCC
+# for the Taiwan S→T variants only (HK keeps OpenCC's own output). Outputs
+# must already be Traditional so OpenCC leaves them untouched.
+_TW_CUSTOM_PHRASES = {
+    '举报': '檢舉',
+}
+_TW_CUSTOM_VARIANTS = frozenset(['s2tw', 's2twp'])
+_TW_CUSTOM_RE = re.compile('|'.join(map(re.escape, _TW_CUSTOM_PHRASES)))
+
+
+def _apply_custom_phrases(text, converter):
+    if getattr(converter, 'conversion', None) not in _TW_CUSTOM_VARIANTS:
+        return text
+    return _TW_CUSTOM_RE.sub(lambda m: _TW_CUSTOM_PHRASES[m.group()], text)
+
+
 def _convert_text(text, converter):
     """converter.convert(), guarded against the "的士"→taxi and adverbial
-    "乍得"→"查德" (Chad) false positives."""
+    "乍得"→"查德" (Chad) false positives, plus custom Taiwan vocabulary."""
     out = []
-    for piece in _DE_SHI_SPLIT_RE.split(text):
+    for piece in _DE_SHI_SPLIT_RE.split(_apply_custom_phrases(text, converter)):
         for seg, keep in _split_protecting_adverb_zhade(piece):
             out.append(seg if keep else converter.convert(seg))
     return ''.join(out)
