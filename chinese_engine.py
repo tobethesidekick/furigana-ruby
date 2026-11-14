@@ -257,6 +257,11 @@ _TW_OVERRIDES = {
     '外卖': '外送', '快递': '宅配', '盒饭': '便當',
     '公交车': '公車', '摩托车': '機車', '小区': '社區',
     '酸奶': '優酪乳', '菠萝': '鳳梨', '土豆': '馬鈴薯',
+    # Guards against newer OpenCC data (opencc-js >= 1.3): 一出 → 一齣 (a stage
+    # play) misfires on "as soon as … out"; 只剩 → 隻剩 misreads 只 as the
+    # measure word. Literal output keeps them as plain 一出… / 只剩.
+    '一出事': '一出事', '一出手': '一出手', '一出门': '一出門',
+    '话一出': '話一出', '一出口': '一出口', '只剩': '只剩',
 }
 _TW_OVERRIDE_RE = re.compile(
     '|'.join(re.escape(k) for k in sorted(_TW_OVERRIDES, key=len, reverse=True))
