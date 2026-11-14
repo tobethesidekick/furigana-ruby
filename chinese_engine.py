@@ -157,6 +157,7 @@ def _get_converter(variant='s2tw'):
         )
     import opencc
     cc = opencc.OpenCC(variant)
+    cc._furigana_variant = variant   # lets _convert_text gate s2twp-only overrides
     _converters[variant] = cc
     return cc
 
@@ -237,13 +238,59 @@ def _apply_custom_phrases(text, converter):
     return _TW_CUSTOM_RE.sub(lambda m: _TW_CUSTOM_PHRASES[m.group()], text)
 
 
-def _convert_text(text, converter):
+# ── Taiwan-usage overrides for s2twp ─────────────────────────────────────────
+# s2twp's phrase table misses some mainland-only terms (数字专辑 → 數字專輯, but
+# Taiwan says 數位專輯) and leaves others as mainland usage. Keys are Simplified
+# source text; values are the final Traditional output, emitted LITERALLY (never
+# re-fed through OpenCC — s2twp's phrase stage is keyed on Traditional and would
+# re-convert some values, e.g. 數據 → 資料). Applied only for the 's2twp' variant,
+# longest key first. Add entries here as new cases turn up.
+#
+# Deliberately NOT listed (ambiguous without context, or fine already):
+#   酒店 (hotel vs. tavern), 质量 (quality vs. physics mass), 数据 (數據/資料
+#   both used in Taiwan — left to s2twp's default), 评论, 支持, 项目, 程序.
+_TW_OVERRIDES = {
+    '数字专辑': '數位專輯',   # digital album
+    '点赞': '按讚', '话筒': '麥克風', '显示屏': '螢幕',
+    '数据线': '傳輸線', '充电宝': '行動電源',
+    '登陆': '登入', '账号': '帳號', '账户': '帳戶',
+    '外卖': '外送', '快递': '宅配', '盒饭': '便當',
+    '公交车': '公車', '摩托车': '機車', '小区': '社區',
+    '酸奶': '優酪乳', '菠萝': '鳳梨', '土豆': '馬鈴薯',
+}
+_TW_OVERRIDE_RE = re.compile(
+    '|'.join(re.escape(k) for k in sorted(_TW_OVERRIDES, key=len, reverse=True))
+)
+
+
+def _convert_with_overrides(seg, converter):
+    """converter.convert(seg), with _TW_OVERRIDES emitted literally (s2twp only)."""
+    if getattr(converter, '_furigana_variant', None) != 's2twp':
+        return converter.convert(seg)
+    out, pos = [], 0
+    for m in _TW_OVERRIDE_RE.finditer(seg):
+        if m.group() == '土豆' and seg[:m.start()].endswith(('天蚕', '天蠶')):
+            continue   # pen name 天蚕土豆 (author), not the vegetable
+        if m.start() > pos:
+            out.append(converter.convert(seg[pos:m.start()]))
+        out.append(_TW_OVERRIDES[m.group()])
+        pos = m.end()
+    if pos < len(seg):
+        out.append(converter.convert(seg[pos:]))
+    return ''.join(out)
+
+
+def _convert_text(text, converter, overrides=False):
     """converter.convert(), guarded against the "的士"→taxi and adverbial
-    "乍得"→"查德" (Chad) false positives, plus custom Taiwan vocabulary."""
+    "乍得"→"查德" (Chad) false positives. With overrides=True (chapter text
+    only — never metadata such as authors/titles), also applies _TW_OVERRIDES
+    for the s2twp variant."""
     out = []
     for piece in _DE_SHI_SPLIT_RE.split(_apply_custom_phrases(text, converter)):
         for seg, keep in _split_protecting_adverb_zhade(piece):
-            out.append(seg if keep else converter.convert(seg))
+            out.append(seg if keep else (
+                _convert_with_overrides(seg, converter) if overrides
+                else converter.convert(seg)))
     return ''.join(out)
 
 
@@ -253,7 +300,7 @@ def _convert_text(text, converter):
 _SKIP_TAGS = frozenset(['script', 'style'])
 
 
-def _convert_html_text_nodes(html, converter):
+def _convert_html_text_nodes(html, converter, overrides=False):
     """
     Walk HTML/XML as a token stream; run converter.convert() on every text
     node outside <script> and <style> blocks.
@@ -280,7 +327,7 @@ def _convert_html_text_nodes(html, converter):
                     skip_depth += 1
         else:
             if skip_depth == 0 and part:
-                part = _convert_text(part, converter)
+                part = _convert_text(part, converter, overrides)
             result.append(part)
 
     return ''.join(result)
@@ -340,7 +387,11 @@ def convert_epub_s2t(epub_path, output_path, variant='s2tw',
                         progress_callback(processed, total, name)
                     try:
                         text = data.decode('utf-8')
-                        text = _convert_html_text_nodes(text, converter)
+                        # Taiwan-usage overrides only for chapter files, never
+                        # .opf/.ncx/.xml (author, title, TOC metadata)
+                        text = _convert_html_text_nodes(
+                            text, converter,
+                            overrides=ext in ('.xhtml', '.html', '.htm'))
                         if target_lang and ext == '.opf':
                             text = _re.sub(
                                 r'<dc:language[^>]*>[^<]*</dc:language>',
@@ -385,7 +436,7 @@ def convert_txt_s2t(txt_path, output_path, variant='s2tw'):
         if text is None:
             with open(txt_path, 'r', encoding='utf-8', errors='replace') as f:
                 text = f.read()
-        converted = _convert_text(text, converter)
+        converted = _convert_text(text, converter, overrides=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(converted)
         return len(text), errors
@@ -414,7 +465,7 @@ def convert_html_s2t(html_path, output_path, variant='s2tw'):
     try:
         with open(html_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
-        result = _convert_html_text_nodes(content, converter)
+        result = _convert_html_text_nodes(content, converter, overrides=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(result)
         return 1, errors
