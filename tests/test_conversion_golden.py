@@ -24,6 +24,8 @@ GOLDEN = [
     # Taiwan-usage overrides (chapter text)
     ('数字专辑发布', '數位專輯釋出', True),
     ('点赞和外卖', '按讚和外送', True),
+    ('举报他', '檢舉他', True),       # _TW_CUSTOM_PHRASES (both Taiwan variants)
+    ('举报他', '檢舉他', False),      # ...applies to metadata too
     # guards
     ('他一出事就跑了', '他一出事就跑了', True),
     ('一出门就下雨', '一出門就下雨', True),
