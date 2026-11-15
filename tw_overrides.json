@@ -1,0 +1,32 @@
+{
+ "schema_version": 1,
+ "name": "tw_overrides",
+ "description": "Literal Taiwan-usage overrides applied on top of OpenCC s2twp (Simplified -> Traditional, Taiwan phrases). Keys are Simplified source text; values are the FINAL Traditional output and must be emitted literally (never re-fed through OpenCC). Longest key wins. Scope rules (chapter text only, never metadata; 天蚕土豆 guard) live in code, not here. See docs/shared-overrides.md.",
+ "owner": "furigana-ruby",
+ "overrides": {
+  "数字专辑": "數位專輯",
+  "点赞": "按讚",
+  "话筒": "麥克風",
+  "显示屏": "螢幕",
+  "数据线": "傳輸線",
+  "充电宝": "行動電源",
+  "登陆": "登入",
+  "账号": "帳號",
+  "账户": "帳戶",
+  "外卖": "外送",
+  "快递": "宅配",
+  "盒饭": "便當",
+  "公交车": "公車",
+  "摩托车": "機車",
+  "小区": "社區",
+  "酸奶": "優酪乳",
+  "菠萝": "鳳梨",
+  "土豆": "馬鈴薯",
+  "一出事": "一出事",
+  "一出手": "一出手",
+  "一出门": "一出門",
+  "话一出": "話一出",
+  "一出口": "一出口",
+  "只剩": "只剩"
+ }
+}

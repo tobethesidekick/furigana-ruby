@@ -244,27 +244,44 @@ def _apply_custom_phrases(text, converter):
 # source text; values are the final Traditional output, emitted LITERALLY (never
 # re-fed through OpenCC — s2twp's phrase stage is keyed on Traditional and would
 # re-convert some values, e.g. 數據 → 資料). Applied only for the 's2twp' variant,
-# longest key first. Add entries here as new cases turn up.
+# longest key first. Entries live in tw_overrides.json (shared with the app);
+# add new cases there.
 #
 # Deliberately NOT listed (ambiguous without context, or fine already):
 #   酒店 (hotel vs. tavern), 质量 (quality vs. physics mass), 数据 (數據/資料
 #   both used in Taiwan — left to s2twp's default), 评论, 支持, 项目, 程序.
-_TW_OVERRIDES = {
-    '数字专辑': '數位專輯',   # digital album
-    '点赞': '按讚', '话筒': '麥克風', '显示屏': '螢幕',
-    '数据线': '傳輸線', '充电宝': '行動電源',
-    '登陆': '登入', '账号': '帳號', '账户': '帳戶',
-    '外卖': '外送', '快递': '宅配', '盒饭': '便當',
-    '公交车': '公車', '摩托车': '機車', '小区': '社區',
-    '酸奶': '優酪乳', '菠萝': '鳳梨', '土豆': '馬鈴薯',
-    # Guards against newer OpenCC data (opencc-js >= 1.3): 一出 → 一齣 (a stage
-    # play) misfires on "as soon as … out"; 只剩 → 隻剩 misreads 只 as the
-    # measure word. Literal output keeps them as plain 一出… / 只剩.
-    '一出事': '一出事', '一出手': '一出手', '一出门': '一出門',
-    '话一出': '話一出', '一出口': '一出口', '只剩': '只剩',
-}
+def _load_tw_overrides():
+    """Load tw_overrides.json (shared with the Chinese Learning App; see
+    docs/shared-overrides.md). Inside Calibre it's read from the plugin zip via
+    get_resources; otherwise from next to this file. On failure we log and fall
+    back to {} (plain s2twp) rather than breaking conversion."""
+    import json
+    raw = None
+    try:
+        from calibre.customize.zipplugin import get_resources
+        raw = get_resources('tw_overrides.json')
+    except Exception:
+        pass
+    try:
+        if raw is None:
+            import os
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   'tw_overrides.json'), 'rb') as f:
+                raw = f.read()
+        data = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
+        if data.get('schema_version') != 1:
+            raise ValueError('unsupported tw_overrides schema_version')
+        return dict(data['overrides'])
+    except Exception as e:
+        print('FuriganaRuby: could not load tw_overrides.json (%r); '
+              'Taiwan overrides disabled' % (e,))
+        return {}
+
+
+_TW_OVERRIDES = _load_tw_overrides()
 _TW_OVERRIDE_RE = re.compile(
     '|'.join(re.escape(k) for k in sorted(_TW_OVERRIDES, key=len, reverse=True))
+    or '(?!)'
 )
 
 

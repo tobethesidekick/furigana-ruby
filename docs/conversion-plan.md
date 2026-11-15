@@ -38,7 +38,7 @@ keyed on Traditional and would turn our 數據 back into 資料).
    writes STPhrases/STCharacters/TWPhrases/TWVariants (format `key<TAB>value`, first value only),
    records the opencc-js version (show in diagnostics). Golden regression set (~50 KB of the novel +
    one sentence per guard); diff report on every refresh. Add guards for 一齣 and 隻剩.
-3. Shared overrides JSON (`tw_overrides.json`) read by the plugin (Python) and the app (JS);
+3. [Plugin side DONE 2026-11-14; owner = plugin repo, see `shared-overrides.md`] Shared overrides JSON (`tw_overrides.json`) read by the plugin (Python) and the app (JS);
    app switches reader from `cn→t` to `twp` using the placeholder technique + plain converter for
    script detection (twp rewrites Traditional variants like 爲/啓, which breaks per-char detection).
 4. User customization (separate feature release): JSON in Calibre config dir; per-direction lists

@@ -120,6 +120,7 @@ SOURCE_FILES = [
     'orientation_engine.py',
     'plugin_logger.py',
     'plugin-import-name-furigana_ruby.txt',
+    'tw_overrides.json',
     'viewer_inject.css',
     'viewer_inject.js',
     'viewer_plugin.py',
