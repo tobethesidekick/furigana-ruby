@@ -63,6 +63,8 @@ GOLDEN = [
     ('提子', '提子', True),         # deliberately not overridden
     ('雪糕', '雪糕', True),         # creamy vs. 冰棒 not distinguishable
     ('黄瓜', '黃瓜', False),        # metadata: no overrides
+    ('西红柿', '番茄', True),
+    ('西红柿炒蛋', '番茄炒蛋', True),
     # guards
     ('他一出事就跑了', '他一出事就跑了', True),
     ('一出门就下雨', '一出門就下雨', True),
