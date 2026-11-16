@@ -26,6 +26,43 @@ GOLDEN = [
     ('点赞和外卖', '按讚和外送', True),
     ('举报他', '檢舉他', True),       # _TW_CUSTOM_PHRASES (both Taiwan variants)
     ('举报他', '檢舉他', False),      # ...applies to metadata too
+    # food terms
+    ('三文鱼', '鮭魚', True),
+    ('金枪鱼', '鮪魚', True),
+    ('吞拿鱼', '鮪魚', True),
+    ('带鱼', '白帶魚', True),
+    ('西兰花', '青花菜', True),
+    ('花菜', '花椰菜', True),
+    ('圆白菜', '高麗菜', True),
+    ('卷心菜', '高麗菜', True),
+    ('包菜', '高麗菜', True),
+    ('小黄瓜', '小黃瓜', True),
+    ('黄瓜', '小黃瓜', True),
+    ('胡萝卜', '紅蘿蔔', True),
+    ('西葫芦', '櫛瓜', True),
+    ('红薯', '地瓜', True),
+    ('猕猴桃', '奇異果', True),
+    ('西柚', '葡萄柚', True),
+    ('牛油果', '酪梨', True),
+    ('鳄梨', '酪梨', True),
+    ('圣女果', '小番茄', True),
+    ('番石榴', '芭樂', True),
+    ('车厘子', '櫻桃', True),
+    ('橙子', '柳丁', True),
+    ('芝士', '起司', True),
+    ('黄油', '奶油', True),
+    ('薯片', '洋芋片', True),
+    ('三文治', '三明治', True),
+    ('蛋挞', '蛋塔', True),
+    ('比萨', '披薩', True),
+    ('方便袋', '塑膠袋', True),
+    ('小黄瓜和黄瓜', '小黃瓜和小黃瓜', True),   # no doubled 小
+    ('烤红薯和红薯粉', '烤地瓜和地瓜粉', True),
+    ('三文鱼片', '鮭魚片', True),
+    ('马蹄糕', '馬蹄糕', True),     # deliberately not overridden
+    ('提子', '提子', True),         # deliberately not overridden
+    ('雪糕', '雪糕', True),         # creamy vs. 冰棒 not distinguishable
+    ('黄瓜', '黃瓜', False),        # metadata: no overrides
     # guards
     ('他一出事就跑了', '他一出事就跑了', True),
     ('一出门就下雨', '一出門就下雨', True),
