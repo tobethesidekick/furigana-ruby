@@ -252,23 +252,22 @@ def _apply_custom_phrases(text, converter):
 #   both used in Taiwan — left to s2twp's default), 评论, 支持, 项目, 程序.
 def _load_tw_overrides():
     """Load tw_overrides.json (shared with the Chinese Learning App; see
-    docs/shared-overrides.md). Inside Calibre it's read from the plugin zip via
-    get_resources; otherwise from next to this file. On failure we log and fall
-    back to {} (plain s2twp) rather than breaking conversion."""
+    docs/shared-overrides.md). Inside Calibre this module lives in the plugin
+    zip (__file__ = ".../Furigana Ruby.zip/chinese_engine.py"), so read the
+    zip directly; otherwise read the file next to this module. On failure we
+    log and fall back to {} (plain s2twp) rather than breaking conversion."""
     import json
-    raw = None
+    import os
     try:
-        from calibre.customize.zipplugin import get_resources
-        raw = get_resources('tw_overrides.json')
-    except Exception:
-        pass
-    try:
-        if raw is None:
-            import os
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   'tw_overrides.json'), 'rb') as f:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if os.path.isfile(here):          # running from inside the plugin zip
+            import zipfile
+            with zipfile.ZipFile(here) as zf:
+                raw = zf.read('tw_overrides.json')
+        else:
+            with open(os.path.join(here, 'tw_overrides.json'), 'rb') as f:
                 raw = f.read()
-        data = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
+        data = json.loads(raw.decode('utf-8'))
         if data.get('schema_version') != 1:
             raise ValueError('unsupported tw_overrides schema_version')
         return dict(data['overrides'])

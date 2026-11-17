@@ -78,7 +78,30 @@ GOLDEN = [
 ]
 
 
+def check_zip_import():
+    """Calibre loads the plugin from inside a zip (__file__ = X.zip/chinese_engine.py);
+    overrides must still load there. (v1.7.5/1.7.6 shipped with them silently off.)"""
+    import subprocess, tempfile, zipfile
+    root = os.path.join(HERE, '..')
+    with tempfile.TemporaryDirectory() as d:
+        zp = os.path.join(d, 'Furigana Ruby.zip')
+        with zipfile.ZipFile(zp, 'w') as z:
+            for f in ('chinese_engine.py', 'tw_overrides.json'):
+                z.write(os.path.join(root, f), f)
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join(
+            [zp] + ([os.environ['OPENCC_PATH']] if os.environ.get('OPENCC_PATH') else []))
+        out = subprocess.run(
+            [sys.executable, '-c',
+             'import chinese_engine as c; print(c._TW_OVERRIDES.get("数字专辑"))'],
+            cwd=d, env=env, capture_output=True, text=True).stdout.strip()
+    ok = out.endswith('數位專輯')
+    print('zip-import overrides load:', 'ok' if ok else 'FAIL (%r)' % out)
+    return ok
+
+
 def main():
+    zip_ok = check_zip_import()
     conv = ce._get_converter('s2twp')
     fails = 0
     for src, want, chapter in GOLDEN:
@@ -94,7 +117,7 @@ def main():
             for line in f:
                 o.write(ce._convert_text(line, conv, overrides=True))
         print('wrote', out)
-    sys.exit(1 if fails else 0)
+    sys.exit(1 if (fails or not zip_ok) else 0)
 
 
 if __name__ == '__main__':
